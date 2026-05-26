@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live Recorder</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">LR</span>
+          <div>
+            <h1>Live Recorder</h1>
+            <p>多平台直播录制</p>
+          </div>
+        </div>
+        <nav>
+          <button class="nav-item active" data-view="rooms">直播间</button>
+          <button class="nav-item" data-view="logs">录制日志</button>
+          <button class="nav-item" data-view="videos">视频文件</button>
+        </nav>
+        <div class="crawler-panel">
+          <span id="crawlerState" class="state-dot"></span>
+          <strong>录制任务</strong>
+          <div class="crawler-actions">
+            <button id="startCrawler" title="启动监控">启动</button>
+            <button id="stopCrawler" title="停止监控">停止</button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section class="toolbar">
+          <div>
+            <h2 id="viewTitle">直播间</h2>
+            <p id="viewSubTitle">管理需要监控的抖音、哔哩哔哩、斗鱼直播间。</p>
+          </div>
+          <div class="toolbar-actions">
+            <input id="keyword" type="search" placeholder="搜索房间、主播、标题" />
+            <button id="refreshBtn" title="刷新列表">刷新</button>
+          </div>
+        </section>
+
+        <section id="roomsView" class="view active">
+          <form id="roomForm" class="form-grid">
+            <input name="room_url" required placeholder="直播间 URL" />
+            <label class="switch">
+              <input name="monitor_enabled" type="checkbox" checked />
+              <span>启用监控</span>
+            </label>
+            <button type="submit">添加直播间</button>
+          </form>
+          <div id="roomsTable" class="table"></div>
+        </section>
+
+        <section id="logsView" class="view">
+          <div id="logsTable" class="table"></div>
+        </section>
+
+        <section id="videosView" class="view">
+          <div id="videosTable" class="table"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

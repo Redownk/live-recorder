@@ -1,0 +1,38 @@
+service:
+  name: "live-recorder"
+  host: "0.0.0.0"
+  port: 8001
+
+database:
+  url: "sqlite+aiosqlite:///./data/live_recorder.db"
+
+redis:
+  host: "127.0.0.1"
+  port: 6379
+  password: ruoyi123
+  database: 0
+  timeout: 10000
+
+logging:
+  level: "INFO"
+  quiet_loggers:
+    - "httpx"
+    - "httpcore"
+    - "aiosqlite"
+
+transcode:
+  # 是否启用转码
+  enable: true
+  # 转码显卡类型，可选值: nvidia / intel / amd
+  # nvidia: 使用 hevc_nvenc
+  # intel: 使用 hevc_qsv
+  # amd: 使用 hevc_amf
+  gpu: "nvidia"
+
+platforms:
+  douyin:
+    cookie: ""
+  bilibili:
+    cookie: ""
+  douyu:
+    cookie: ""

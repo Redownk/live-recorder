@@ -1,0 +1,13 @@
+fastapi==0.129.2
+uvicorn==0.41.0
+pydantic==2.12.5
+SQLAlchemy==2.0.46
+aiosqlite==0.21.0
+redis==7.2.1
+PyYAML==6.0.3
+httpx==0.28.1
+requests==2.32.5
+gmssl==3.2.2
+boto3==1.42.68
+h2==4.3.0
+truststore==0.10.4

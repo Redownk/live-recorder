@@ -1,0 +1,86 @@
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, text
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class LiveRoom(Base):
+    __tablename__ = "live_room"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    platform: Mapped[str] = mapped_column(String(32), index=True)
+    room_id: Mapped[str] = mapped_column(String(128), index=True)
+    room_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    sec_uid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    avatar: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    cover: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    monitor_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"), index=True)
+    last_live_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    create_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, server_default=text("CURRENT_TIMESTAMP"))
+    update_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, server_default=text("CURRENT_TIMESTAMP"))
+    del_flag: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"), index=True)
+
+
+class LiveRoomLog(Base):
+    __tablename__ = "live_room_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    live_room_id: Mapped[int] = mapped_column(Integer, index=True)
+    platform: Mapped[str] = mapped_column(String(32), index=True)
+    owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    start_live: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    end_live: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    live_time: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    user_num: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_user: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    create_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, server_default=text("CURRENT_TIMESTAMP"))
+    del_flag: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"), index=True)
+
+
+class LiveRoomStats(Base):
+    __tablename__ = "live_room_stats"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    live_room_id: Mapped[int] = mapped_column(Integer, index=True)
+    live_room_log_id: Mapped[int] = mapped_column(Integer, index=True)
+    online_count: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    like_count: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    watch_user_count: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    collect_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, server_default=text("CURRENT_TIMESTAMP"))
+
+
+class LiveRoomLogVideo(Base):
+    __tablename__ = "live_room_log_video"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(String(32), default="000000")
+    live_room_id: Mapped[int] = mapped_column(Integer, index=True)
+    live_room_log_id: Mapped[int] = mapped_column(Integer, index=True)
+    file_name: Mapped[str] = mapped_column(String(512))
+    file_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    create_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, server_default=text("CURRENT_TIMESTAMP"))
+    del_flag: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"), index=True)
+
+
+class OssConfig(Base):
+    __tablename__ = "sys_oss_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    endpoint: Mapped[str] = mapped_column(String(255))
+    access_key: Mapped[str] = mapped_column(String(255))
+    secret_key: Mapped[str] = mapped_column(String(255))
+    bucket_name: Mapped[str] = mapped_column(String(255))
+    region: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    prefix: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_https: Mapped[str] = mapped_column(String(1), default="Y")
+    status: Mapped[str] = mapped_column(String(1), default="0", server_default=text("'0'"))
