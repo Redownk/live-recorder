@@ -55,9 +55,8 @@ class BilibiliRecorder(BaseRecorder):
             })
             await db.commit()
             log_id = result.lastrowid
-        asyncio.create_task(
-            self.record_loop(log_id,output_prefix,stream_url)
-        )
+        self._log_id = log_id
+        await self.record_loop(log_id,output_prefix,stream_url)
 
     async def record_loop(self,log_id,file_name,stream_url):
         # headers=BiliLiveChecker.build_fake_headers()
@@ -81,9 +80,6 @@ class BilibiliRecorder(BaseRecorder):
         start_timestamp = time.time()
         process = None
 
-        stop_event = asyncio.Event()
-        # 后台锁续期任务
-        renew_task = asyncio.create_task(self._renew_lock_loop(stop_event))
         data_task = asyncio.create_task(self._collect_live_data_loop(log_id))
         try:
             while reconnect_count < max_reconnect:
@@ -91,6 +87,7 @@ class BilibiliRecorder(BaseRecorder):
                     output_file = f"{file_name}_{segment_index}.ts"
                     cmd = [
                         ffmpeg_path,
+                        "-nostdin", "-n",
                         "-headers", headers_str,
                         "-i", stream_url,
                         "-c", "copy",
@@ -101,6 +98,7 @@ class BilibiliRecorder(BaseRecorder):
                     output_file = f"{file_name}_{segment_index}.flv"
                     cmd = [
                         ffmpeg_path,
+                        "-nostdin", "-n",
                         "-headers", headers_str,
                         "-i", stream_url,
                         "-c", "copy",
@@ -161,21 +159,9 @@ class BilibiliRecorder(BaseRecorder):
                     await asyncio.sleep(5)
         finally:
             self.recording_finished(log_id)
-            renew_task.cancel()
             data_task.cancel()
-            try:
-                await data_task
-            except asyncio.CancelledError:
-                pass
-
-            if process and process.returncode is None:
-                try:
-                    process.terminate()
-                    logger.info(self._log_message("清理遗留 FFmpeg 进程"))
-                except:
-                    pass
-
-            await self.release_record_lock()
+            await asyncio.gather(data_task, return_exceptions=True)
+            await self.stop_process(process)
 
             end_time = datetime.now()
             live_seconds = int(time.time() - start_timestamp)
@@ -188,33 +174,24 @@ class BilibiliRecorder(BaseRecorder):
                     SET end_live  = :end_live,
                         live_time = :live_time,
                         user_num = :user_num,
-                        total_user = :total_user
+                        total_user = :total_user,
+                        interrupted = :interrupted
                     WHERE id = :id
                 """), {
                     "end_live": end_time,
                     "live_time": live_seconds,
                     "user_num": max_online_count,
                     "total_user": last_total_user_count,
+                    "interrupted": bool(asyncio.current_task().cancelling()),
                     "id": log_id
                 })
                 await db.commit()
 
             logger.info(self._log_message("%s 直播结束"), file_name)
-            await self._post_process(file_name, segment_index,log_id)
-
-    async def _renew_lock_loop(self,stop_event: asyncio.Event):
-        try:
-            while True:
-                await asyncio.sleep(30)
-                success=await self.renew_record_lock()
-                if not success:
-                    stop_event.set()
-                    break
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.exception(self._log_message("续锁任务发生异常: %s"), e)
-            stop_event.set()
+            if not asyncio.current_task().cancelling():
+                await self._post_process(file_name, segment_index,log_id)
+            else:
+                logger.info(self._log_message("录制已中断，保留分片文件"))
 
     async def _collect_live_data_loop(self, log_id):
         try:

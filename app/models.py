@@ -47,6 +47,7 @@ class LiveRoomLog(Base):
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     start_live: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     end_live: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    interrupted: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
     live_time: Mapped[int | None] = mapped_column(Integer, nullable=True)
     user_num: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_user: Mapped[str | None] = mapped_column(String(64), nullable=True)

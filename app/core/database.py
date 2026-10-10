@@ -43,6 +43,9 @@ async def init_db(app, db_url: str):
             if "file_path" not in {column[1] for column in video_columns.all()}:
                 await conn.execute(text("ALTER TABLE live_room_log_video ADD COLUMN file_path TEXT"))
             await _ensure_sqlite_defaults(conn)
+            log_columns = await conn.execute(text("PRAGMA table_info(live_room_log)"))
+            if "interrupted" not in {column[1] for column in log_columns.all()}:
+                await conn.execute(text("ALTER TABLE live_room_log ADD COLUMN interrupted BOOLEAN NOT NULL DEFAULT 0"))
 
 
 async def _ensure_sqlite_defaults(conn):
@@ -72,13 +75,14 @@ async def _ensure_sqlite_defaults(conn):
         await conn.execute(text(f"DROP INDEX IF EXISTS {index_name}"))
     await conn.execute(text("ALTER TABLE live_room_log RENAME TO live_room_log_old"))
     await conn.run_sync(Base.metadata.create_all)
-    await conn.execute(text("""
+    interrupted_value = "interrupted" if any(column["name"] == "interrupted" for column in columns) else "0"
+    await conn.execute(text(f"""
         INSERT INTO live_room_log
             (id, live_room_id, platform, owner, title, start_live, end_live,
-             live_time, user_num, total_user, create_time, del_flag)
+             live_time, user_num, total_user, create_time, del_flag, interrupted)
         SELECT
             id, live_room_id, platform, owner, title, start_live, end_live,
-            live_time, user_num, total_user, COALESCE(create_time, CURRENT_TIMESTAMP), del_flag
+            live_time, user_num, total_user, COALESCE(create_time, CURRENT_TIMESTAMP), del_flag, {interrupted_value}
         FROM live_room_log_old
     """))
     await conn.execute(text("DROP TABLE live_room_log_old"))

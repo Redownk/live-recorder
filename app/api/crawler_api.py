@@ -1,14 +1,12 @@
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter
 from app.services.crawler_manager import crawler_manager
 
 router = APIRouter(prefix="/crawler")
 
 
 @router.post("/start")
-async def start(request: Request):
-    if not getattr(request.app.state, "redis_connected", False):
-        raise HTTPException(status_code=503, detail="Redis 未连接，无法启动录制监控")
+async def start():
     result = await crawler_manager.start()
     return {"msg": result}
 

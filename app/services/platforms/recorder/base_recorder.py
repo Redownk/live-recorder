@@ -2,7 +2,6 @@ import time
 from datetime import datetime
 import asyncio
 from pathlib import Path
-from uuid import uuid4
 
 from app.core.session import get_db_session
 from app.core.logger import get_logger
@@ -10,6 +9,7 @@ from app.services.platforms.recorder import get_ffmpeg_path
 from app.models import LiveRoomLogVideo
 from app.services.recording_settings import create_output_prefix
 from app.services.recording_status import get_recording_status
+from app.services.recording_tasks import get_recording_tasks
 from sqlalchemy import text
 
 
@@ -26,76 +26,47 @@ class BaseRecorder:
     def _log_message(self, message: str) -> str:
         return f"[platform={self.platform} room_id={self.room_id}] {message}"
 
-    async def acquire_check_lock(self):
-        redis_client = self.app.state.redis
-        self._check_lock_token = uuid4().hex
-        return await redis_client.set(
-            f"lock:check:{self.platform}:{self.room_id}",
-            self._check_lock_token,
-            nx=True,
-            ex=max(60, self.app.state.recording_settings.settings.check_interval_seconds)
-        )
-
-    async def release_check_lock(self):
-        await self.app.state.redis.eval(
-            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
-            1,
-            f"lock:check:{self.platform}:{self.room_id}",
-            self._check_lock_token,
-        )
-
-    async def acquire_record_lock(self):
-        redis_client = self.app.state.redis
-        return await redis_client.set(
-            f"lock:record:{self.platform}:{self.room_id}",
-            "1",
-            nx=True,
-            ex=120
-        )
-
-    async def renew_record_lock(self):
-        redis_client = self.app.state.redis
-        result=await redis_client.expire(f"lock:record:{self.platform}:{self.room_id}", 120)
-        return result > 0
-
-    async def release_record_lock(self):
-        redis_client = self.app.state.redis
-        await redis_client.delete(f"lock:record:{self.platform}:{self.room_id}")
-
     async def start(self):
-        redis_client = self.app.state.redis
-        if redis_client is None:
-            logger.warning(self._log_message("Redis 未连接，跳过录制检查"))
+        manager = get_recording_tasks(self.app)
+        key = (self.platform, str(self.room_id))
+        token = manager.begin_check(key)
+        if token is None:
+            logger.info(self._log_message("已有检查或录制任务，跳过"))
             return
-
-        if await redis_client.exists(f"lock:record:{self.platform}:{self.room_id}"):
-            logger.info(self._log_message("录制锁已存在，跳过"))
-            return
-
-        if not await self.acquire_check_lock():
-            logger.info(self._log_message("检查锁已存在，跳过"))
-            return
-
         logger.info(self._log_message("开始检测直播状态"))
         try:
             live_info = await self.check_live_status()
+            if not live_info["is_live"]:
+                logger.info(self._log_message("未开播，跳过录制: %s"), live_info)
+                return
+            logger.info(self._log_message("检测到开播，准备录制: %s"), live_info.get("title") or live_info.get("owner"))
+            manager.start_recording(key, lambda: self.record(live_info), self.finish_recording_task)
         finally:
-            await self.release_check_lock()
+            manager.end_check(key, token)
 
-        if not live_info["is_live"]:
-            logger.info(self._log_message("未开播，跳过录制: %s"), live_info)
+    async def finish_recording_task(self):
+        log_id = getattr(self, "_log_id", None)
+        if log_id is not None:
+            self.recording_finished(log_id)
+            async with get_db_session(self.app) as db:
+                await db.execute(text("UPDATE live_room_log SET interrupted=1 WHERE id=:id AND end_live IS NULL"), {"id": log_id})
+                await db.commit()
+
+    async def stop_process(self, process):
+        if process is None or process.returncode is not None:
             return
-
-        if not await self.acquire_record_lock():
-            logger.info(self._log_message("获取录制锁失败，跳过"))
-            return
-
-        logger.info(self._log_message("检测到开播，开始录制: %s"), live_info.get("title") or live_info.get("owner"))
         try:
-            await self.record(live_info)
-        except BaseException:
-            await self.release_record_lock()
-            raise
+            process.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.wait()
 
     async def check_live_status(self):
         raise NotImplementedError
@@ -187,7 +158,10 @@ class BaseRecorder:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL
         )
-        return_code = await process.wait()
+        try:
+            return_code = await process.wait()
+        finally:
+            await self.stop_process(process)
 
         if return_code != 0 or not os.path.isfile(merged_file) or os.path.getsize(merged_file) == 0:
             logger.warning(self._log_message("合并失败，保留分段文件，退出码: %s"), return_code)
@@ -214,7 +188,10 @@ class BaseRecorder:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE
                 )
-                stdout, stderr = await probe_process.communicate()
+                try:
+                    stdout, stderr = await probe_process.communicate()
+                finally:
+                    await self.stop_process(probe_process)
                 if probe_process.returncode == 0:
                     duration_str = stdout.decode('utf-8').strip()
                     if duration_str:

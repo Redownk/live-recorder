@@ -183,3 +183,40 @@ test('log and video filters survive reload', async ({ page }, testInfo) => {
   await expect(page.getByRole('link', { name: '打开 直播录制.mp4' })).toHaveAttribute('href', 'https://example.com/video.mp4');
   await page.screenshot({ path: testInfo.outputPath('videos.png'), fullPage: true });
 });
+
+test('interrupted recordings are not displayed as ongoing', async ({ page }, testInfo) => {
+  await mockApi(page);
+  await page.route('**/api/logs*', (route) => route.fulfill({ json: [
+    { id: 8, platform: 'DOUYIN', owner: '中断主播', title: '异常中断', start_live: '2026-10-09T09:00:00', end_live: null, interrupted: true, live_time: null },
+    { id: 9, platform: 'DOUYU', owner: '停止主播', title: '服务关闭', start_live: '2026-10-09T09:00:00', end_live: '2026-10-09T10:00:00', interrupted: true, live_time: 3600 },
+  ] }));
+  await page.goto('/logs');
+  await expect(page.getByRole('cell', { name: '录制中断', exact: true })).toHaveCount(2);
+  await expect(page.getByRole('cell', { name: '录制中', exact: true })).toHaveCount(0);
+  await page.getByRole('cell', { name: '录制中断', exact: true }).first().scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('interrupted-logs.png'), fullPage: true });
+});
+
+test('stopping waits for recording cleanup before enabling restart', async ({ page }, testInfo) => {
+  await mockApi(page);
+  let running = true;
+  let releaseStop;
+  const held = new Promise((resolve) => { releaseStop = resolve; });
+  await page.route('**/crawler/status', (route) => route.fulfill({ json: { running } }));
+  await page.route('**/crawler/stop', async (route) => {
+    await held;
+    running = false;
+    await route.fulfill({ json: { msg: 'stopped' } });
+  });
+  await page.goto('/rooms');
+  await expect(page.getByText('监控运行中', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '停止', exact: true }).click();
+  await expect(page.getByText('正在停止录制…', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '启动', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath('stopping.png'), fullPage: true });
+  releaseStop();
+  await expect(page.getByRole('region', { name: '录制监控' }).getByText('监控已停止', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '启动', exact: true })).toBeEnabled();
+});

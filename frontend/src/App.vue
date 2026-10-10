@@ -7,12 +7,13 @@ import { api } from './api.js';
 const route = useRoute();
 const running = ref(null);
 const crawlerBusy = ref(false);
+const crawlerAction = ref('');
 const crawlerError = ref('');
 const toast = ref(null);
 let toastTimer;
 let pollTimer;
 let disposed = false;
-const statusText = computed(() => running.value === null ? '状态未知' : running.value ? '监控运行中' : '监控已停止');
+const statusText = computed(() => crawlerBusy.value && crawlerAction.value === 'stop' ? '正在停止录制…' : running.value === null ? '状态未知' : running.value ? '监控运行中' : '监控已停止');
 function notify(message, kind = 'success') {
   clearTimeout(toastTimer);
   toast.value = { message, kind };
@@ -29,12 +30,13 @@ async function refreshStatus() {
 }
 async function controlCrawler(action) {
   crawlerBusy.value = true;
+  crawlerAction.value = action;
   try {
     await api.crawler(action);
     await refreshStatus();
     notify(action === 'start' ? '监控已启动' : '监控已停止');
   } catch (error) { notify(error.message, 'error'); }
-  finally { crawlerBusy.value = false; }
+  finally { crawlerBusy.value = false; crawlerAction.value = ''; }
 }
 onMounted(() => {
   refreshStatus();
@@ -59,7 +61,7 @@ onUnmounted(() => { disposed = true; clearInterval(pollTimer); clearTimeout(toas
         <p v-if="crawlerError" class="error-text">{{ crawlerError }}</p>
         <div class="crawler-actions">
           <button :disabled="crawlerBusy || running === true" @click="controlCrawler('start')"><Play :size="16" />启动</button>
-          <button :disabled="crawlerBusy || running === false" @click="controlCrawler('stop')"><CircleStop :size="16" />停止</button>
+          <button :disabled="crawlerBusy || running === false" title="停止监控和录制" @click="controlCrawler('stop')"><CircleStop :size="16" />停止</button>
         </div>
       </section>
     </aside>

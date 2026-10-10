@@ -9,10 +9,12 @@ from app.api import crawler_api, live, rooms, settings
 from app.core.config import local_config
 from app.core.database import init_db
 from app.core.logger import get_logger, setup_logging
-from app.core.redis_client import create_redis_client
+from app.core.instance_lock import InstanceLock
 from app.services.crawler_manager import crawler_manager
 from app.services.recording_settings import init_recording_settings
-from app.services.recording_status import get_recording_status
+from app.services.recording_status import RecordingStatusTracker
+from app.services.recording_tasks import RecordingTaskManager, get_recording_tasks
+from app.services.recording_recovery import recover_interrupted_recordings
 
 
 setup_logging()
@@ -42,23 +44,25 @@ app.include_router(settings.router)
 @app.on_event("startup")
 async def startup_event():
     logger.info("服务启动中...")
-    await init_db(app, local_config.get("database", {}).get("url", "sqlite+aiosqlite:///./data/live_recorder.db"))
-    await init_recording_settings(app)
-    get_recording_status(app)
-
-    app.state.redis = None
-    app.state.redis_connected = False
+    db_url = local_config.get("database", {}).get("url", "sqlite+aiosqlite:///./data/live_recorder.db")
+    instance_lock = InstanceLock(db_url)
+    instance_lock.acquire()
+    app.state.instance_lock = instance_lock
     try:
-        app.state.redis = await create_redis_client()
-        await app.state.redis.ping()
-        app.state.redis_connected = True
-        logger.info("Redis连接成功")
-    except Exception as exc:
-        logger.warning("Redis连接失败，录制监控暂不可用: %s", exc)
-
-    crawler_manager.init_app(app)
-    if local_config.get("crawler", {}).get("auto_start", False):
-        await crawler_manager.start()
+        await init_db(app, db_url)
+        await init_recording_settings(app)
+        app.state.recording_status = RecordingStatusTracker()
+        app.state.recording_tasks = RecordingTaskManager()
+        await recover_interrupted_recordings(app)
+        crawler_manager.init_app(app)
+        if local_config.get("crawler", {}).get("auto_start", False):
+            await crawler_manager.start()
+    except BaseException:
+        engine = getattr(app.state, "engine", None)
+        if engine is not None:
+            await engine.dispose()
+        instance_lock.release()
+        raise
 
     logger.info("服务启动完成")
 
@@ -66,15 +70,23 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("服务关闭中...")
-    await crawler_manager.stop()
-
-    redis_client = getattr(app.state, "redis", None)
-    if redis_client is not None:
-        await redis_client.aclose()
-
-    engine = getattr(app.state, "engine", None)
-    if engine is not None:
-        await engine.dispose()
+    tasks = get_recording_tasks(app)
+    tasks.closing = True
+    try:
+        try:
+            await crawler_manager.shutdown()
+        finally:
+            await tasks.shutdown()
+        await recover_interrupted_recordings(app)
+    finally:
+        try:
+            engine = getattr(app.state, "engine", None)
+            if engine is not None:
+                await engine.dispose()
+        finally:
+            instance_lock = getattr(app.state, "instance_lock", None)
+            if instance_lock is not None:
+                instance_lock.release()
 
     logger.info("服务关闭完成")
 
@@ -90,7 +102,6 @@ async def health():
         "status": "UP",
         "components": {
             "database": "UP",
-            "redis": "UP" if getattr(app.state, "redis_connected", False) else "DOWN",
         },
     }
 
@@ -103,4 +114,5 @@ if __name__ == "__main__":
         app,
         host=service_config.get("host", "0.0.0.0"),
         port=int(service_config.get("port", 8000)),
+        workers=1,
     )

@@ -31,7 +31,7 @@ watch(() => route.query.room_id, load, { immediate: true });
       <thead><tr><th>平台</th><th>主播</th><th>标题</th><th>开始</th><th>结束</th><th>时长</th><th>在线峰值</th><th>视频</th></tr></thead>
       <tbody><tr v-for="log in logs" :key="log.id">
         <td><span class="platform-badge" :class="log.platform.toLowerCase()">{{ platformName(log.platform) }}</span></td><td>{{ log.owner || '-' }}</td><td class="title-cell">{{ log.title || '-' }}</td>
-        <td class="time-cell">{{ formatTime(log.start_live) }}</td><td class="time-cell">{{ log.end_live ? formatTime(log.end_live) : '录制中' }}</td><td>{{ formatDuration(log.live_time) }}</td><td>{{ log.user_num ?? '-' }}</td>
+        <td class="time-cell">{{ formatTime(log.start_live) }}</td><td class="time-cell">{{ log.interrupted ? '录制中断' : log.end_live ? formatTime(log.end_live) : '录制中' }}</td><td>{{ formatDuration(log.live_time) }}</td><td>{{ log.user_num ?? '-' }}</td>
         <td><RouterLink class="icon-button" :to="{ path: '/videos', query: { log_id: log.id } }" title="查看视频" :aria-label="`查看日志 ${log.id} 的视频`"><Film :size="17" /></RouterLink></td>
       </tr><tr v-if="!logs.length"><td colspan="8" class="empty-state">{{ loading ? '加载中…' : error ? '日志加载失败' : '暂无录制日志' }}</td></tr></tbody>
     </table></div>

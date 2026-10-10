@@ -6,13 +6,6 @@ service:
 database:
   url: "sqlite+aiosqlite:///./data/live_recorder.db"
 
-redis:
-  host: "127.0.0.1"
-  port: 6379
-  password: ruoyi123
-  database: 0
-  timeout: 10000
-
 logging:
   level: "INFO"
   quiet_loggers:
