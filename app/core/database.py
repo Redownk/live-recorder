@@ -2,22 +2,34 @@
 from pathlib import Path
 
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.models import Base
+from app.core.paths import ROOT_DIR
 
 engine = None
 AsyncSessionLocal = None
+
+
+def resolve_database_url(db_url: str) -> str:
+    url = make_url(db_url)
+    if url.get_backend_name() == "sqlite" and url.database and url.database != ":memory:":
+        path = Path(url.database).expanduser()
+        if not path.is_absolute():
+            path = ROOT_DIR / path
+        url = url.set(database=str(path.resolve()))
+    return url.render_as_string(hide_password=False)
 
 
 async def init_db(app, db_url: str):
     global engine
     global AsyncSessionLocal
 
-    if db_url.startswith("sqlite"):
-        db_path = db_url.replace("sqlite+aiosqlite:///", "", 1)
-        if db_path.startswith("./"):
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    db_url = resolve_database_url(db_url)
+    url = make_url(db_url)
+    if url.get_backend_name() == "sqlite" and url.database and url.database != ":memory:":
+        Path(url.database).parent.mkdir(parents=True, exist_ok=True)
 
     engine = create_async_engine(
         db_url,

@@ -13,3 +13,5 @@ frontend/.env.local
 frontend/.env.*.local
 frontend/test-results/
 frontend/playwright-report/
+build/
+dist/

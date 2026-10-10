@@ -1,6 +1,7 @@
 import os
 import shutil
 
+from app.core.paths import RESOURCE_DIR
 
 def get_ffmpeg_path():
     # 1️⃣ 优先读取环境变量
@@ -13,6 +14,10 @@ def get_ffmpeg_path():
             raise RuntimeError(
                 f"FFMPEG_PATH 已配置但文件不存在: {ffmpeg_path}"
             )
+
+    bundled_path = RESOURCE_DIR / "tools" / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    if bundled_path.is_file():
+        return str(bundled_path)
 
     # 2️⃣ 没有环境变量，尝试从系统 PATH 查找
     ffmpeg_cmd = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"

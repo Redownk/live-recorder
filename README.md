@@ -36,6 +36,38 @@ npm run dev
 
 ## 配置
 
+### Windows EXE
+
+先在 `frontend/` 执行 `npm ci`、`npm run build`，然后在项目根目录的虚拟环境中运行：
+
+```powershell
+python -m pip install pyinstaller
+python -m PyInstaller --clean --noconfirm LiveRecorder.spec
+```
+
+生成 `dist/LiveRecorder.exe`，包含 Vue 静态文件、Python 后端和 FFmpeg / FFprobe。
+`.spec` 中显式收集 `aiosqlite`、SQLite 异步方言和 `greenlet`；构建环境必须已安装
+`requirements.txt`。如果构建电脑的 FFmpeg 安装位置变化，需要调整 `.spec` 的工具路径。
+Vue 使用相对 API 地址（不要设置指向开发服务器的 `VITE_API_BASE_URL`）。
+双击 EXE 后，在浏览器访问 `http://127.0.0.1:8000`，不需要启动 5173。
+前端历史路由可直接访问或刷新；现有 API 和接口文档路径不变。
+控制台按 Ctrl+C 正常退出并清理后台任务。
+
+打包资源从 EXE 临时解压目录读取；可写数据默认保存在 EXE 所在目录，
+首次运行生成 `config.yaml`，已有配置不覆盖。相对 SQLite 路径及录制路径以该数据目录为基准，
+不会写入临时解压目录。EXE 所在目录必须可写，也可通过 `LIVE_RECORDER_DATA_DIR`
+指定另一个可写目录。已有数据库不会自动从源码项目复制或迁移，需先停止旧程序，
+再将数据库放到新数据目录的 `data/` 下，并检查原录制保存路径。
+
+可在独立临时数据目录执行打包自检；自检会初始化该目录的数据库、检测前端及内置工具后退出，
+不启动监听端口，不打开浏览器，不自动监控直播间：
+
+```powershell
+$env:LIVE_RECORDER_DATA_DIR = "$env:TEMP/live-recorder-self-test"
+.\dist\LiveRecorder.exe --self-test
+Remove-Item Env:LIVE_RECORDER_DATA_DIR
+```
+
 ### 后端目录
 
 后端按功能归组，功能包内放置 API、参数模型与业务实现：
