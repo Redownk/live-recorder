@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse
 from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,6 +10,7 @@ from app.models import LiveRoom, LiveRoomLog, LiveRoomLogVideo, LiveRoomStats
 from app.schemas import LiveRoomCreate, LiveRoomOut, LiveRoomUpdate, MonitorUpdate
 from app.services.live_checker import LiveChecker
 from app.services.platforms.recorder_factory import create_recorder
+from app.services.recording_status import get_recording_status
 
 
 router = APIRouter(prefix="/api", tags=["录制管理"])
@@ -28,12 +32,18 @@ async def list_rooms(keyword: str | None = Query(default=None), db: AsyncSession
             or_(
                 LiveRoom.room_id.like(like),
                 LiveRoom.owner.like(like),
+                LiveRoom.remark.like(like),
                 LiveRoom.title.like(like),
                 LiveRoom.platform.like(like),
             )
         )
     result = await db.execute(stmt)
     return result.scalars().all()
+
+
+@router.get("/recording-status")
+async def recording_status(request: Request):
+    return get_recording_status(request.app).snapshot()
 
 
 @router.post("/rooms", response_model=LiveRoomOut, status_code=status.HTTP_201_CREATED)
@@ -59,6 +69,7 @@ async def create_room(payload: LiveRoomCreate, db: AsyncSession = Depends(get_db
         room_url=payload.room_url,
         sec_uid=str(info.get("secUid") or "") or None,
         owner=info.get("owner"),
+        remark=(payload.remark or "").strip() or info.get("owner"),
         title=info.get("roomTitle") or info.get("title") or info.get("owner"),
         avatar=info.get("avatar"),
         cover=info.get("cover"),
@@ -137,6 +148,18 @@ async def list_videos(log_id: int | None = Query(default=None), limit: int = Que
         stmt = stmt.where(LiveRoomLogVideo.live_room_log_id == log_id)
     result = await db.execute(stmt)
     return result.scalars().all()
+
+
+@router.get("/videos/{video_id}/file")
+async def get_video_file(video_id: int, db: AsyncSession = Depends(get_db)):
+    video = await db.get(LiveRoomLogVideo, video_id)
+    if video is None or video.del_flag != 0 or not video.file_path:
+        raise HTTPException(status_code=404, detail="本地视频不存在")
+    path = Path(video.file_path)
+    if not path.is_absolute() or not path.is_file():
+        raise HTTPException(status_code=404, detail="本地视频文件已移动或删除")
+    media_type = {".ts": "video/mp2t", ".flv": "video/x-flv", ".mp4": "video/mp4"}.get(path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path, media_type=media_type, filename=video.file_name, content_disposition_type="inline")
 
 
 @router.get("/stats")

@@ -8,5 +8,5 @@ if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
         host=service_config.get("host", "0.0.0.0"),
-        port=int(service_config.get("port", 8001)),
+        port=int(service_config.get("port", 8000)),
     )

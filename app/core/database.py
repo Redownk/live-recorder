@@ -36,6 +36,12 @@ async def init_db(app, db_url: str):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         if db_url.startswith("sqlite"):
+            room_columns = await conn.execute(text("PRAGMA table_info(live_room)"))
+            if "remark" not in {column[1] for column in room_columns.all()}:
+                await conn.execute(text("ALTER TABLE live_room ADD COLUMN remark VARCHAR(512)"))
+            video_columns = await conn.execute(text("PRAGMA table_info(live_room_log_video)"))
+            if "file_path" not in {column[1] for column in video_columns.all()}:
+                await conn.execute(text("ALTER TABLE live_room_log_video ADD COLUMN file_path TEXT"))
             await _ensure_sqlite_defaults(conn)
 
 

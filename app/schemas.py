@@ -9,6 +9,7 @@ class LiveRoomBase(BaseModel):
     room_url: str | None = None
     sec_uid: str | None = None
     owner: str | None = None
+    remark: str | None = Field(default=None, max_length=512)
     title: str | None = None
     avatar: str | None = None
     cover: str | None = None
@@ -17,6 +18,7 @@ class LiveRoomBase(BaseModel):
 
 class LiveRoomCreate(BaseModel):
     room_url: str
+    remark: str | None = Field(default=None, max_length=512)
     monitor_enabled: bool = True
 
 
@@ -26,6 +28,7 @@ class LiveRoomUpdate(BaseModel):
     room_url: str | None = None
     sec_uid: str | None = None
     owner: str | None = None
+    remark: str | None = Field(default=None, max_length=512)
     title: str | None = None
     avatar: str | None = None
     cover: str | None = None

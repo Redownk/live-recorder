@@ -1,18 +1,18 @@
 import asyncio
+import os
 import sys
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 
-from app.api import crawler_api, live, rooms
+from app.api import crawler_api, live, rooms, settings
 from app.core.config import local_config
 from app.core.database import init_db
 from app.core.logger import get_logger, setup_logging
 from app.core.redis_client import create_redis_client
 from app.services.crawler_manager import crawler_manager
+from app.services.recording_settings import init_recording_settings
+from app.services.recording_status import get_recording_status
 
 
 setup_logging()
@@ -25,24 +25,26 @@ app = FastAPI(title="Live Recorder", description="多直播平台单体录制平
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[origin.strip() for origin in os.getenv(
+        "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-static_dir = Path(__file__).resolve().parent / "static"
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
 app.include_router(rooms.router)
 app.include_router(live.router)
 app.include_router(crawler_api.router)
+app.include_router(settings.router)
 
 
 @app.on_event("startup")
 async def startup_event():
     logger.info("服务启动中...")
     await init_db(app, local_config.get("database", {}).get("url", "sqlite+aiosqlite:///./data/live_recorder.db"))
+    await init_recording_settings(app)
+    get_recording_status(app)
 
     app.state.redis = None
     app.state.redis_connected = False
@@ -79,7 +81,7 @@ async def shutdown_event():
 
 @app.get("/", include_in_schema=False)
 async def index():
-    return FileResponse(static_dir / "index.html")
+    return {"name": "Live Recorder API", "docs": "/docs"}
 
 
 @app.get("/actuator/health")

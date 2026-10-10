@@ -1,0 +1,231 @@
+<script setup>
+import { inject, nextTick, onUnmounted, ref, watch } from 'vue';
+import { Check, History, Pencil, Plus, Radio, RefreshCw, Search, Trash2, X } from '@lucide/vue';
+import { api } from '../api.js';
+import { formatDuration, formatTime, platformName, safeUrl } from '../format.js';
+import ModalDialog from '../components/ModalDialog.vue';
+
+const notify = inject('notify');
+const rooms = ref([]);
+const keyword = ref('');
+const loading = ref(false);
+const error = ref('');
+const modal = ref(null);
+const selected = ref(null);
+const saving = ref(false);
+const formError = ref('');
+const rowBusy = ref([]);
+const statuses = ref({});
+const statusLoaded = ref(false);
+const statusError = ref('');
+const statusTick = ref(performance.now());
+let statusReceivedAt = performance.now();
+let statusBusy = false;
+let disposed = false;
+const draft = ref({});
+const remarkEditingId = ref(null);
+const remarkDraft = ref('');
+const remarkSaving = ref(false);
+const remarkError = ref('');
+const remarkInput = ref(null);
+let loadId = 0;
+
+async function loadRecordingStatus() {
+  if (statusBusy || disposed) return;
+  statusBusy = true;
+  try {
+    const data = await api.recordingStatuses();
+    if (!disposed) {
+      statuses.value = data;
+      statusReceivedAt = performance.now();
+      statusTick.value = statusReceivedAt;
+      statusLoaded.value = true;
+      statusError.value = '';
+    }
+  } catch (err) { if (!disposed) statusError.value = err.message; }
+  finally { statusBusy = false; }
+}
+function recordingLabel(room) {
+  if (statusError.value) return '状态不可用';
+  if (!statusLoaded.value) return '获取中…';
+  return { recording: '录制中', reconnecting: '重连中' }[statuses.value[room.id]?.state] || '未录制';
+}
+function recordingDuration(room) {
+  const status = statuses.value[room.id];
+  if (statusError.value || !statusLoaded.value || !status) return '-';
+  return formatDuration(status.elapsed_seconds + Math.max(0, statusTick.value - statusReceivedAt) / 1000);
+}
+
+async function loadRooms() {
+  const id = ++loadId;
+  loading.value = true;
+  error.value = '';
+  try {
+    const data = await api.rooms({ keyword: keyword.value.trim() });
+    if (id === loadId) rooms.value = data;
+  } catch (err) { if (id === loadId) error.value = err.message; }
+  finally { if (id === loadId) loading.value = false; }
+}
+async function refreshRooms() {
+  await Promise.all([loadRooms(), loadRecordingStatus()]);
+}
+function openModal(type, room = null) {
+  if (remarkSaving.value) return;
+  cancelRemark();
+  selected.value = room;
+  formError.value = '';
+  draft.value = type === 'edit'
+    ? { owner: room.owner || '', title: room.title || '', remark: room.remark || '', monitor_enabled: room.monitor_enabled }
+    : { room_url: '', remark: '', monitor_enabled: true };
+  modal.value = type;
+}
+async function saveRoom() {
+  if (saving.value) return;
+  saving.value = true;
+  formError.value = '';
+  try {
+    const payload = { ...draft.value, remark: draft.value.remark.trim() || null };
+    if (modal.value === 'add') await api.addRoom({ ...payload, room_url: draft.value.room_url.trim() });
+    else await api.editRoom(selected.value.id, payload);
+    notify(modal.value === 'add' ? '直播间已添加' : '直播间已更新');
+    modal.value = null;
+    await loadRooms();
+  } catch (err) { formError.value = err.message; }
+  finally { saving.value = false; }
+}
+async function removeRoom() {
+  if (saving.value) return;
+  saving.value = true;
+  try {
+    await api.deleteRoom(selected.value.id);
+    modal.value = null;
+    notify('直播间已删除');
+    await loadRooms();
+  } catch (err) { formError.value = err.message; }
+  finally { saving.value = false; }
+}
+async function roomAction(room, action, event) {
+  if (rowBusy.value.includes(room.id)) return;
+  rowBusy.value.push(room.id);
+  try {
+    if (action === 'check') {
+      const result = await api.liveStatus(room.id);
+      notify(result.is_live ? `正在直播：${result.title || result.owner || ''}` : '当前未开播');
+    } else {
+      const updated = await api.monitor(room.id, !room.monitor_enabled);
+      Object.assign(room, updated);
+    }
+  } catch (err) { notify(err.message, 'error'); }
+  finally {
+    if (event) event.target.checked = room.monitor_enabled;
+    rowBusy.value = rowBusy.value.filter((id) => id !== room.id);
+  }
+}
+function setRemarkInput(element) { remarkInput.value = element; }
+async function editRemark(room) {
+  if (remarkSaving.value) return;
+  remarkEditingId.value = room.id;
+  remarkDraft.value = room.remark || '';
+  remarkError.value = '';
+  await nextTick();
+  remarkInput.value?.focus();
+}
+function cancelRemark() {
+  if (remarkSaving.value) return;
+  remarkEditingId.value = null;
+  remarkError.value = '';
+}
+async function saveRemark(room) {
+  if (remarkSaving.value) return;
+  remarkSaving.value = true;
+  remarkError.value = '';
+  try {
+    const updated = await api.editRoom(room.id, { remark: remarkDraft.value.trim() || null });
+    rooms.value = rooms.value.map((item) => item.id === room.id ? { ...item, ...updated } : item);
+    remarkEditingId.value = null;
+    notify('备注已保存');
+  } catch (err) { remarkError.value = err.message; }
+  finally { remarkSaving.value = false; }
+}
+watch(keyword, (value) => { if (!value) loadRooms(); });
+const statusPoll = setInterval(loadRecordingStatus, 3000);
+const durationTick = setInterval(() => { statusTick.value = performance.now(); }, 1000);
+onUnmounted(() => {
+  disposed = true;
+  loadId += 1;
+  clearInterval(statusPoll);
+  clearInterval(durationTick);
+});
+loadRooms();
+loadRecordingStatus();
+</script>
+
+<template>
+  <section>
+    <div class="view-toolbar">
+      <form class="search-form" role="search" @submit.prevent="loadRooms">
+        <Search :size="17" /><input v-model="keyword" type="search" aria-label="搜索直播间" placeholder="搜索房间、主播、备注、标题" />
+        <button type="submit" class="icon-button" title="搜索" aria-label="搜索"><Search :size="17" /></button>
+      </form>
+      <div class="toolbar-actions">
+        <button class="icon-button" title="刷新直播间" aria-label="刷新直播间" :disabled="loading" @click="refreshRooms"><RefreshCw :size="18" :class="{ spinning: loading }" /></button>
+        <button class="primary" :disabled="remarkSaving" @click="openModal('add')"><Plus :size="17" />添加直播间</button>
+      </div>
+    </div>
+    <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
+    <p v-if="statusError" class="error-banner" role="alert">录制状态获取失败：{{ statusError }}</p>
+    <div class="table-wrap" :aria-busy="loading">
+      <table>
+        <thead><tr><th>平台</th><th>主播 / 房间号</th><th>备注</th><th>标题</th><th>监控</th><th>录制状态</th><th>录制时长</th><th>最近开播</th><th class="actions-head">操作</th></tr></thead>
+        <tbody>
+          <tr v-for="room in rooms" :key="room.id">
+            <td><span class="platform-badge" :class="room.platform.toLowerCase()">{{ platformName(room.platform) }}</span></td>
+            <td><div class="owner-cell"><img v-if="safeUrl(room.avatar)" :src="safeUrl(room.avatar)" class="avatar" referrerpolicy="no-referrer" alt="" @error="($event.target.style.display = 'none')" /><div><strong>{{ room.owner || '-' }}</strong><a v-if="safeUrl(room.room_url)" :href="safeUrl(room.room_url)" target="_blank" rel="noopener noreferrer" class="secondary-text">{{ room.room_id }}</a><span v-else class="secondary-text">{{ room.room_id }}</span></div></div></td>
+            <td class="remark-cell">
+              <template v-if="remarkEditingId === room.id">
+                <form class="remark-editor" @submit.prevent="saveRemark(room)">
+                  <input :ref="setRemarkInput" v-model="remarkDraft" :aria-label="`备注 ${room.owner || room.room_id}`" maxlength="512" :disabled="remarkSaving" @keydown.esc.prevent="cancelRemark" />
+                  <button type="submit" class="icon-button" title="保存备注" aria-label="保存备注" :disabled="remarkSaving"><Check :size="16" /></button>
+                  <button type="button" class="icon-button" title="取消编辑备注" aria-label="取消编辑备注" :disabled="remarkSaving" @click="cancelRemark"><X :size="16" /></button>
+                </form>
+                <p v-if="remarkError" class="error-text" role="alert">{{ remarkError }}</p>
+              </template>
+              <div v-else class="remark-display"><span>{{ room.remark || '-' }}</span><button class="icon-button" title="编辑备注" :aria-label="`编辑备注 ${room.owner || room.room_id}`" :disabled="remarkSaving" @click="editRemark(room)"><Pencil :size="15" /></button></div>
+            </td>
+            <td class="title-cell">{{ room.title || '-' }}</td>
+            <td><input type="checkbox" role="switch" :aria-label="`监控 ${room.owner || room.room_id}`" :checked="room.monitor_enabled" :disabled="rowBusy.includes(room.id)" @change="roomAction(room, 'monitor', $event)" /></td>
+            <td class="recording-state-cell"><span class="recording-state" :class="{ recording: !statusError && statuses[room.id]?.state === 'recording', reconnecting: !statusError && statuses[room.id]?.state === 'reconnecting' }">{{ recordingLabel(room) }}</span></td>
+            <td class="recording-duration">{{ recordingDuration(room) }}</td>
+            <td class="time-cell">{{ formatTime(room.last_live_time) }}</td>
+            <td><div class="row-actions">
+              <button class="icon-button" title="检查直播状态" :aria-label="`检查 ${room.owner || room.room_id}`" :disabled="rowBusy.includes(room.id)" @click="roomAction(room, 'check')"><Radio :size="17" /></button>
+              <RouterLink class="icon-button" :to="{ path: '/logs', query: { room_id: room.id } }" title="录制日志" :aria-label="`日志 ${room.owner || room.room_id}`"><History :size="17" /></RouterLink>
+              <button class="icon-button" title="编辑直播间" :aria-label="`编辑 ${room.owner || room.room_id}`" :disabled="remarkSaving" @click="openModal('edit', room)"><Pencil :size="17" /></button>
+              <button class="icon-button danger" title="删除直播间" :aria-label="`删除 ${room.owner || room.room_id}`" :disabled="remarkSaving" @click="openModal('delete', room)"><Trash2 :size="17" /></button>
+            </div></td>
+          </tr>
+          <tr v-if="!rooms.length"><td colspan="9" class="empty-state">{{ loading ? '加载中…' : error ? '直播间加载失败' : keyword ? '没有匹配的直播间' : '暂无直播间' }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="list-count">{{ rooms.length }} 个直播间</p>
+    <ModalDialog v-if="modal" :title="modal === 'add' ? '添加直播间' : modal === 'edit' ? '编辑直播间' : '删除直播间'" :busy="saving" @close="modal = null">
+      <form v-if="modal !== 'delete'" class="modal-body" @submit.prevent="saveRoom">
+        <label v-if="modal === 'add'" class="field">直播间 URL<input v-model="draft.room_url" type="url" required autofocus placeholder="https://live.douyin.com/…" :disabled="saving" /></label>
+        <template v-else>
+          <label class="field">主播昵称<input v-model="draft.owner" maxlength="255" :disabled="saving" /></label>
+          <label class="field">标题<input v-model="draft.title" maxlength="512" :disabled="saving" /></label>
+        </template>
+        <label class="field">备注<input v-model="draft.remark" maxlength="512" :disabled="saving" /></label>
+        <label class="checkbox-label"><input v-model="draft.monitor_enabled" type="checkbox" :disabled="saving" />启用监控</label>
+        <p v-if="formError" class="error-text" role="alert">{{ formError }}</p>
+        <footer class="modal-actions"><button type="button" :disabled="saving" @click="modal = null">取消</button><button type="submit" class="primary" :disabled="saving">{{ saving ? '提交中…' : modal === 'add' ? '添加' : '保存' }}</button></footer>
+      </form>
+      <div v-else class="modal-body">
+        <p>确定删除「{{ selected.owner || selected.room_id }}」？</p>
+        <p v-if="formError" class="error-text" role="alert">{{ formError }}</p>
+        <footer class="modal-actions"><button :disabled="saving" @click="modal = null">取消</button><button class="danger-solid" :disabled="saving" @click="removeRoom">{{ saving ? '删除中…' : '确认删除' }}</button></footer>
+      </div>
+    </ModalDialog>
+  </section>
+</template>

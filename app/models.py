@@ -8,6 +8,15 @@ class Base(DeclarativeBase):
     pass
 
 
+class RecordingSettings(Base):
+    __tablename__ = "recording_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    save_path: Mapped[str] = mapped_column(String(1024))
+    filename_template: Mapped[str] = mapped_column(String(255))
+    check_interval_seconds: Mapped[int] = mapped_column(Integer)
+
+
 class LiveRoom(Base):
     __tablename__ = "live_room"
 
@@ -17,6 +26,7 @@ class LiveRoom(Base):
     room_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     sec_uid: Mapped[str | None] = mapped_column(String(255), nullable=True)
     owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    remark: Mapped[str | None] = mapped_column(String(512), nullable=True)
     title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     avatar: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     cover: Mapped[str | None] = mapped_column(String(1024), nullable=True)
@@ -65,22 +75,8 @@ class LiveRoomLogVideo(Base):
     live_room_log_id: Mapped[int] = mapped_column(Integer, index=True)
     file_name: Mapped[str] = mapped_column(String(512))
     file_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     duration: Mapped[int | None] = mapped_column(Integer, nullable=True)
     create_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, server_default=text("CURRENT_TIMESTAMP"))
     del_flag: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"), index=True)
-
-
-class OssConfig(Base):
-    __tablename__ = "sys_oss_config"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    endpoint: Mapped[str] = mapped_column(String(255))
-    access_key: Mapped[str] = mapped_column(String(255))
-    secret_key: Mapped[str] = mapped_column(String(255))
-    bucket_name: Mapped[str] = mapped_column(String(255))
-    region: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    prefix: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    is_https: Mapped[str] = mapped_column(String(1), default="Y")
-    status: Mapped[str] = mapped_column(String(1), default="0", server_default=text("'0'"))

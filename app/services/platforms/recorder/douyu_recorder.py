@@ -1,7 +1,6 @@
 import asyncio
 import time
 from datetime import datetime
-from pathlib import Path
 
 from sqlalchemy import text
 
@@ -16,7 +15,6 @@ logger = get_logger(__name__)
 
 
 class DouyuRecorder(BaseRecorder):
-    RECORD_DIR = Path(__file__).resolve().parents[4] / "record"
 
     async def check_live_status(self):
         info = await DouyuLiveChecker.get_room_info(self.room_id)
@@ -35,9 +33,7 @@ class DouyuRecorder(BaseRecorder):
 
     async def record(self, live_info):
         start_time = datetime.now()
-        file_name = f"{self.platform}_{live_info['owner']}_{start_time.strftime('%Y%m%d%H%M%S')}"
-        self.RECORD_DIR.mkdir(parents=True, exist_ok=True)
-        output_prefix = str(self.RECORD_DIR / file_name)
+        output_prefix = await self.create_output_prefix(live_info, start_time)
 
         stream_url = await DouyuLiveChecker.get_stream_url(self.room_id)
 
@@ -119,7 +115,11 @@ class DouyuRecorder(BaseRecorder):
                     )
 
                     logger.info(self._log_message("ffmpeg 启动"))
-                    return_code = await process.wait()
+                    self.recording_started(log_id)
+                    try:
+                        return_code = await process.wait()
+                    finally:
+                        self.recording_reconnecting(log_id)
                     logger.info(self._log_message("流断开，return_code: %s"), return_code)
 
                     import os
@@ -154,6 +154,7 @@ class DouyuRecorder(BaseRecorder):
                     reconnect_count += 1
                     await asyncio.sleep(5)
         finally:
+            self.recording_finished(log_id)
             renew_task.cancel()
             # data_task.cancel()
             # try:

@@ -2,7 +2,6 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from pathlib import Path
 from sqlalchemy import text
 
 from app.core.logger import get_logger
@@ -16,7 +15,6 @@ logger = get_logger(__name__)
 
 
 class DouyinRecorder(BaseRecorder):
-    RECORD_DIR = Path(__file__).resolve().parents[4] / "record"
 
     QUALITY_LIST = {
         "real_origin": "真原画",
@@ -105,9 +103,7 @@ class DouyinRecorder(BaseRecorder):
     async def record(self, live_info):
 
         start_time = datetime.now()
-        file_name = f"{self.platform}_{live_info['owner']}_{start_time.strftime('%Y%m%d%H%M%S')}"
-        self.RECORD_DIR.mkdir(parents=True, exist_ok=True)
-        output_prefix = str(self.RECORD_DIR / file_name)
+        output_prefix = await self.create_output_prefix(live_info, start_time)
 
         priority = ["real_origin", "origin", "uhd", "hd", "sd", "ld", "ao"]
 
@@ -201,7 +197,11 @@ class DouyinRecorder(BaseRecorder):
                         stderr=asyncio.subprocess.DEVNULL
                     )
                     logger.info(self._log_message("ffmpeg 启动"))
-                    return_code = await process.wait()
+                    self.recording_started(log_id)
+                    try:
+                        return_code = await process.wait()
+                    finally:
+                        self.recording_reconnecting(log_id)
                     logger.info(self._log_message("流断开，return_code: %s"), return_code)
                     # ⭐ 判断文件是否真正生成且有内容
                     import os
@@ -234,6 +234,7 @@ class DouyinRecorder(BaseRecorder):
                     reconnect_count += 1
                     await asyncio.sleep(5)
         finally:
+            self.recording_finished(log_id)
             renew_task.cancel()
             data_task.cancel()
             try:
