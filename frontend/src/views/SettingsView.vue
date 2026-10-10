@@ -1,7 +1,8 @@
 <script setup>
-import { computed, inject, onUnmounted, reactive, ref, watch } from 'vue';
-import { RefreshCw, RotateCcw, Save } from '@lucide/vue';
+import { computed, inject, nextTick, onUnmounted, reactive, ref, watch } from 'vue';
+import { FolderOpen, RefreshCw, RotateCcw, Save } from '@lucide/vue';
 import { api } from '../api.js';
+import DirectoryPicker from '../components/DirectoryPicker.vue';
 
 const notify = inject('notify');
 const presets = [
@@ -25,6 +26,8 @@ const preview = ref(null);
 const previewBusy = ref(false);
 const previewError = ref('');
 const rule = ref('custom');
+const directoryPickerOpen = ref(false);
+const directoryBrowseButton = ref(null);
 let previewTimer;
 let previewId = 0;
 let disposed = false;
@@ -50,6 +53,16 @@ function resetDraft() {
   Object.assign(draft, saved.value);
   rule.value = presets.some((item) => item.value === draft.filename_template) ? draft.filename_template : 'custom';
   saveError.value = '';
+}
+function selectDirectory(path) {
+  draft.save_path = path;
+  saveError.value = '';
+  closeDirectoryPicker();
+}
+async function closeDirectoryPicker() {
+  directoryPickerOpen.value = false;
+  await nextTick();
+  if (!disposed) directoryBrowseButton.value?.focus();
 }
 async function save() {
   if (saving.value || previewBusy.value || previewError.value) return;
@@ -92,7 +105,7 @@ load();
       <fieldset :disabled="saving" class="settings-fields">
         <section class="settings-section">
           <h2>录制文件</h2>
-          <label class="field">保存路径<input v-model="draft.save_path" required maxlength="1024" placeholder="./record" /></label>
+          <div class="field"><label for="save-path">保存路径</label><div class="save-path-input"><input id="save-path" v-model="draft.save_path" required maxlength="1024" placeholder="./record" /><button ref="directoryBrowseButton" type="button" class="icon-button" title="浏览保存目录" aria-label="浏览保存目录" @click="directoryPickerOpen = true"><FolderOpen :size="19" /></button></div></div>
           <dl class="settings-detail"><dt>后端保存目录</dt><dd>{{ previewBusy ? '计算中…' : previewError ? '-' : preview?.resolved_save_path }}</dd></dl>
           <label class="field">命名规则<select v-model="rule" aria-label="命名规则" @change="selectRule"><option v-for="preset in presets" :key="preset.value" :value="preset.value">{{ preset.label }}</option><option value="custom">自定义</option></select></label>
           <template v-if="rule === 'custom'">
@@ -110,5 +123,6 @@ load();
       <p v-if="saveError" class="error-banner" role="alert">{{ saveError }}</p>
       <footer class="settings-actions"><span class="muted">{{ dirty ? '有未保存的修改' : '已保存' }}</span><button type="button" :disabled="!dirty || saving" @click="resetDraft"><RotateCcw :size="16" />还原修改</button><button type="submit" class="primary" :disabled="!dirty || saving || previewBusy || !!previewError"><Save :size="16" />{{ saving ? '保存中…' : '保存设置' }}</button></footer>
     </form>
+    <DirectoryPicker v-if="directoryPickerOpen" :initial-path="draft.save_path" @select="selectDirectory" @close="closeDirectoryPicker" />
   </section>
 </template>

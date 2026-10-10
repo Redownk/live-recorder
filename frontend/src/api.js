@@ -33,6 +33,12 @@ function query(values = {}) {
 
 export const api = {
   settings: () => request('/api/settings'),
+  directories: (params) => request(`/api/settings/directories${query(params)}`),
+  processingFiles: (params) => request(`/api/processing/files${query(params)}`),
+  processingCapabilities: () => request('/api/processing/capabilities'),
+  processingJobs: () => request('/api/processing/jobs'),
+  createProcessingJob: (body) => request('/api/processing/jobs', { method: 'POST', body }),
+  cancelProcessingJob: (id) => request(`/api/processing/jobs/${id}`, { method: 'DELETE' }),
   saveSettings: (body) => request('/api/settings', { method: 'PUT', body }),
   previewSettings: (body) => request('/api/settings/preview', { method: 'POST', body }),
   rooms: (params) => request(`/api/rooms${query(params)}`),

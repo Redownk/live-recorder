@@ -7,10 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.session import get_db
 from app.models import LiveRoom, LiveRoomLog, LiveRoomLogVideo, LiveRoomStats
-from app.schemas import LiveRoomCreate, LiveRoomOut, LiveRoomUpdate, MonitorUpdate
-from app.services.live_checker import LiveChecker
+from app.modules.live_rooms.schemas import LiveRoomCreate, LiveRoomOut, LiveRoomUpdate, MonitorUpdate
+from app.modules.live_rooms.checker import LiveChecker
 from app.services.platforms.recorder_factory import create_recorder
-from app.services.recording_status import get_recording_status
+from app.modules.recording.status import get_recording_status
 
 
 router = APIRouter(prefix="/api", tags=["录制管理"])

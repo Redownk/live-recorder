@@ -5,16 +5,20 @@ import sys
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import crawler_api, live, rooms, settings
+from app.modules.recording import api as crawler_api
+from app.modules.live_rooms import api as rooms, live_api as live
+from app.modules.settings import api as settings
+from app.modules.video_processing import api as processing
 from app.core.config import local_config
 from app.core.database import init_db
 from app.core.logger import get_logger, setup_logging
 from app.core.instance_lock import InstanceLock
-from app.services.crawler_manager import crawler_manager
-from app.services.recording_settings import init_recording_settings
-from app.services.recording_status import RecordingStatusTracker
-from app.services.recording_tasks import RecordingTaskManager, get_recording_tasks
-from app.services.recording_recovery import recover_interrupted_recordings
+from app.modules.recording.crawler import crawler_manager
+from app.modules.settings.service import init_recording_settings
+from app.modules.recording.status import RecordingStatusTracker
+from app.modules.recording.tasks import RecordingTaskManager, get_recording_tasks
+from app.modules.recording.recovery import recover_interrupted_recordings
+from app.modules.video_processing.service import VideoProcessingManager
 
 
 setup_logging()
@@ -39,6 +43,7 @@ app.include_router(rooms.router)
 app.include_router(live.router)
 app.include_router(crawler_api.router)
 app.include_router(settings.router)
+app.include_router(processing.router)
 
 
 @app.on_event("startup")
@@ -53,6 +58,7 @@ async def startup_event():
         await init_recording_settings(app)
         app.state.recording_status = RecordingStatusTracker()
         app.state.recording_tasks = RecordingTaskManager()
+        app.state.video_processing = VideoProcessingManager(app.state.recording_tasks)
         await recover_interrupted_recordings(app)
         crawler_manager.init_app(app)
         if local_config.get("crawler", {}).get("auto_start", False):
@@ -76,7 +82,10 @@ async def shutdown_event():
         try:
             await crawler_manager.shutdown()
         finally:
-            await tasks.shutdown()
+            try:
+                await tasks.shutdown()
+            finally:
+                await app.state.video_processing.shutdown()
         await recover_interrupted_recordings(app)
     finally:
         try:

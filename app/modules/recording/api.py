@@ -1,6 +1,6 @@
 
 from fastapi import APIRouter
-from app.services.crawler_manager import crawler_manager
+from app.modules.recording.crawler import crawler_manager
 
 router = APIRouter(prefix="/crawler")
 

@@ -10,6 +10,7 @@ class RecordingTaskManager:
     def __init__(self):
         self.checks = {}
         self.tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self.output_prefixes = set()
         self.closing = False
         self.paused = False
 
@@ -72,6 +73,7 @@ class RecordingTaskManager:
         await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
         self.checks.clear()
+        self.output_prefixes.clear()
 
     async def shutdown(self):
         self.closing = True

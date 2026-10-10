@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-async function settingsApi(page, { failLoad = false, failSave = false } = {}) {
+async function settingsApi(page, { failLoad = false, failSave = false, failBrowseOnce = false } = {}) {
   let settings = { save_path: './record', filename_template: '{platform}_{owner}_{timestamp}', check_interval_seconds: 5 };
   const writes = [];
   function response(options) {
@@ -11,6 +11,30 @@ async function settingsApi(page, { failLoad = false, failSave = false } = {}) {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (path === '/crawler/status') return route.fulfill({ json: { running: false } });
+    if (path === '/api/settings/directories') {
+      if (failBrowseOnce) {
+        failBrowseOnce = false;
+        return route.fulfill({ status: 403, json: { detail: '没有权限访问此目录' } });
+      }
+      const url = new URL(request.url());
+      const current = url.searchParams.get('path')?.replaceAll('\\', '/') || null;
+      const offset = Number(url.searchParams.get('offset') || 0);
+      const shortcuts = [{ name: '项目目录', path: 'E:/live-recorder' }, { name: '用户目录', path: 'C:/Users/test' }];
+      const directory = (name, base) => ({ name, path: `${base}/${name}` });
+      let resolved = current === './record' ? 'E:/live-recorder/record' : current;
+      let parent = null;
+      let entries;
+      if (!current) entries = [{ name: 'C:/', path: 'C:/' }, { name: 'E:/', path: 'E:/' }];
+      else if (current === 'E:/') entries = [directory('直播存档', 'E:')];
+      else if (current === 'E:/直播存档') { parent = 'E:/'; entries = []; }
+      else if (current === 'E:/live-recorder') { parent = 'E:/'; entries = [directory('record', resolved)]; }
+      else if (current === 'E:/live-recorder/record' || current === './record') {
+        parent = 'E:/live-recorder';
+        entries = Array.from({ length: 201 }, (_, index) => directory(index === 0 ? '中文存档' : `目录${String(index).padStart(3, '0')}`, resolved));
+      } else if (current === 'E:/live-recorder/record/中文存档') { parent = 'E:/live-recorder/record'; entries = []; }
+      else return route.fulfill({ status: 404, json: { detail: '目录不存在或不是文件夹' } });
+      return route.fulfill({ json: { path: resolved, parent, directories: entries.slice(offset, offset + 200), shortcuts, offset, limit: 200, total: entries.length, has_more: offset + 200 < entries.length } });
+    }
     if (path === '/api/settings/preview') {
       const draft = request.postDataJSON();
       if (draft.filename_template.includes('{unknown}')) return route.fulfill({ status: 422, json: { detail: [{ msg: '不支持的命名变量或格式' }] } });
@@ -120,4 +144,77 @@ test('record ID only appears when explicitly included in the template', async ({
   await page.getByLabel('命名规则', { exact: true }).selectOption('custom');
   await page.getByLabel('文件名模板', { exact: true }).fill('{owner}_{timestamp}_{record_id}');
   await expect(page.getByText('示例主播_20260101120000_' + 'a1b2c3d4'.repeat(4) + '.ts', { exact: true })).toBeVisible();
+});
+
+test('directory browser navigates and chooses without saving until confirmed', async ({ page }, testInfo) => {
+  const writes = await settingsApi(page);
+  await page.goto('/settings');
+  await page.getByRole('button', { name: '浏览保存目录' }).click();
+  const dialog = page.getByRole('dialog', { name: '选择保存目录' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel('当前目录')).toHaveValue('E:/live-recorder/record');
+  await dialog.getByRole('button', { name: '下一页目录' }).click();
+  await expect(dialog.getByRole('button', { name: '打开 目录200', exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '上一页目录' }).click();
+  await dialog.getByRole('button', { name: '打开 中文存档', exact: true }).click();
+  await expect(dialog.getByText('没有子目录', { exact: true })).toBeVisible();
+  await expect(dialog.getByLabel('当前目录')).toHaveValue('E:/live-recorder/record/中文存档');
+  await dialog.getByRole('button', { name: '上一级', exact: true }).click();
+  await expect(dialog.getByLabel('当前目录')).toHaveValue('E:/live-recorder/record');
+  await dialog.getByRole('button', { name: '打开 中文存档', exact: true }).click();
+  await page.screenshot({ path: testInfo.outputPath('directory-picker.png'), fullPage: true });
+  await dialog.getByRole('button', { name: '选择此目录', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByLabel('保存路径', { exact: true })).toHaveValue('E:/live-recorder/record/中文存档');
+  expect(writes).toEqual([]);
+  await expect(page.getByRole('button', { name: '保存设置', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '保存设置', exact: true }).click();
+  await expect(page.getByText('录制设置已保存', { exact: true })).toBeVisible();
+  expect(writes[0].save_path).toBe('E:/live-recorder/record/中文存档');
+  await page.reload();
+  await expect(page.getByLabel('保存路径', { exact: true })).toHaveValue('E:/live-recorder/record/中文存档');
+});
+
+test('directory browser supports drives, manual navigation and cancellation', async ({ page }) => {
+  const writes = await settingsApi(page);
+  await page.goto('/settings');
+  await page.getByRole('button', { name: '浏览保存目录' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByLabel('当前目录')).toHaveValue('E:/live-recorder/record');
+  await dialog.getByRole('button', { name: '盘符和根目录' }).click();
+  await expect(dialog.getByRole('button', { name: '选择此目录' })).toBeDisabled();
+  await dialog.getByRole('button', { name: '打开 E:/', exact: true }).click();
+  await dialog.getByRole('button', { name: '打开 直播存档', exact: true }).click();
+  await expect(dialog.getByLabel('当前目录')).toHaveValue('E:/直播存档');
+  await dialog.getByLabel('当前目录').fill('E:/live-recorder/record/中文存档');
+  await expect(dialog.getByRole('button', { name: '选择此目录' })).toBeDisabled();
+  await dialog.getByRole('button', { name: '打开目录', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: '选择此目录' })).toBeEnabled();
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.getByLabel('保存路径', { exact: true })).toHaveValue('./record');
+  expect(writes).toEqual([]);
+  await page.getByRole('button', { name: '浏览保存目录' }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '浏览保存目录' })).toBeFocused();
+});
+
+test('directory access failure can be recovered without modifying settings', async ({ page }) => {
+  const writes = await settingsApi(page, { failBrowseOnce: true });
+  await page.goto('/settings');
+  await page.getByRole('button', { name: '浏览保存目录' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('alert')).toHaveText('没有权限访问此目录');
+  await expect(dialog.getByRole('button', { name: '选择此目录' })).toBeDisabled();
+  await dialog.getByRole('button', { name: '刷新目录', exact: true }).click();
+  await expect(dialog.getByLabel('当前目录')).toHaveValue('E:/live-recorder/record');
+  await dialog.getByLabel('当前目录').fill('E:/missing');
+  await dialog.getByRole('button', { name: '打开目录', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toHaveText('目录不存在或不是文件夹');
+  await expect(dialog.getByRole('button', { name: '选择此目录' })).toBeDisabled();
+  await dialog.getByRole('button', { name: '项目目录', exact: true }).click();
+  await expect(dialog.getByLabel('当前目录')).toHaveValue('E:/live-recorder');
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  expect(writes).toEqual([]);
+  await expect(page.getByLabel('保存路径', { exact: true })).toHaveValue('./record');
 });

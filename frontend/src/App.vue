@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, provide, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import { CircleStop, Clapperboard, Film, ListVideo, Play, Radio, Settings, X } from '@lucide/vue';
+import { CircleStop, Clapperboard, Film, ListVideo, Play, Radio, Settings, WandSparkles, X } from '@lucide/vue';
 import { api } from './api.js';
 
 const route = useRoute();
@@ -53,6 +53,7 @@ onUnmounted(() => { disposed = true; clearInterval(pollTimer); clearTimeout(toas
         <RouterLink to="/rooms"><ListVideo :size="19" />直播间</RouterLink>
         <RouterLink to="/logs"><Clapperboard :size="19" />录制日志</RouterLink>
         <RouterLink to="/videos"><Film :size="19" />视频文件</RouterLink>
+        <RouterLink to="/processing/transcode" :class="{ 'router-link-active': route.path.startsWith('/processing') }"><WandSparkles :size="19" />视频处理</RouterLink>
         <RouterLink to="/settings"><Settings :size="19" />设置</RouterLink>
       </nav>
       <section class="crawler-panel" aria-label="录制监控">

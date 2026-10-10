@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from app.services.live_checker import LiveChecker
+from app.modules.live_rooms.checker import LiveChecker
 
 router = APIRouter(prefix="/live", tags=["直播检测"])
 

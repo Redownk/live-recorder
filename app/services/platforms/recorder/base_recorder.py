@@ -7,9 +7,9 @@ from app.core.session import get_db_session
 from app.core.logger import get_logger
 from app.services.platforms.recorder import get_ffmpeg_path
 from app.models import LiveRoomLogVideo
-from app.services.recording_settings import create_output_prefix
-from app.services.recording_status import get_recording_status
-from app.services.recording_tasks import get_recording_tasks
+from app.modules.settings.service import create_output_prefix
+from app.modules.recording.status import get_recording_status
+from app.modules.recording.tasks import get_recording_tasks
 from sqlalchemy import text
 
 
@@ -45,12 +45,17 @@ class BaseRecorder:
             manager.end_check(key, token)
 
     async def finish_recording_task(self):
-        log_id = getattr(self, "_log_id", None)
-        if log_id is not None:
-            self.recording_finished(log_id)
-            async with get_db_session(self.app) as db:
-                await db.execute(text("UPDATE live_room_log SET interrupted=1 WHERE id=:id AND end_live IS NULL"), {"id": log_id})
-                await db.commit()
+        try:
+            log_id = getattr(self, "_log_id", None)
+            if log_id is not None:
+                self.recording_finished(log_id)
+                async with get_db_session(self.app) as db:
+                    await db.execute(text("UPDATE live_room_log SET interrupted=1 WHERE id=:id AND end_live IS NULL"), {"id": log_id})
+                    await db.commit()
+        finally:
+            prefix = getattr(self, "_output_prefix", None)
+            if prefix is not None:
+                get_recording_tasks(self.app).output_prefixes.discard(prefix)
 
     async def stop_process(self, process):
         if process is None or process.returncode is not None:
@@ -75,7 +80,10 @@ class BaseRecorder:
         raise NotImplementedError
 
     async def create_output_prefix(self, live_info, start_time):
-        return await create_output_prefix(self.app, self.room, live_info, start_time)
+        prefix = await create_output_prefix(self.app, self.room, live_info, start_time)
+        self._output_prefix = Path(prefix).resolve()
+        get_recording_tasks(self.app).output_prefixes.add(self._output_prefix)
+        return prefix
 
     def recording_started(self, log_id):
         get_recording_status(self.app).started(self.room["id"], log_id)

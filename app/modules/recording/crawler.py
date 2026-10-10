@@ -1,8 +1,8 @@
 
 import asyncio
-from app.services.crawler_worker import crawler_loop
-from app.services.recording_tasks import get_recording_tasks
-from app.services.recording_recovery import recover_interrupted_recordings
+from app.modules.recording.worker import crawler_loop
+from app.modules.recording.tasks import get_recording_tasks
+from app.modules.recording.recovery import recover_interrupted_recordings
 
 
 class CrawlerManager:

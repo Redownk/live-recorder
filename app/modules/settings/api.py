@@ -1,11 +1,29 @@
 from datetime import datetime
+import asyncio
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 
-from app.services.recording_settings import RecordingOptions, build_filename, resolve_save_path
+from app.modules.settings.service import RecordingOptions, build_filename, resolve_save_path
+from app.shared.filesystem.browser import list_directories
+from app.shared.filesystem.access import check_directory_access
 
 
 router = APIRouter(prefix="/api/settings", tags=["录制设置"])
+
+
+@router.get("/directories")
+async def browse_directories(request: Request, path: str | None = Query(default=None, max_length=1024), offset: int = Query(default=0, ge=0, le=1000000), limit: int = Query(default=200, ge=1, le=500)):
+    check_directory_access(request)
+    try:
+        result = await asyncio.to_thread(list_directories, path, offset, limit)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="没有权限访问此目录") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="目录不存在或不是文件夹") from exc
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail="无法浏览此目录，请检查路径和访问权限") from exc
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 class RecordingSettingsResponse(RecordingOptions):
