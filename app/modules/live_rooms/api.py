@@ -7,10 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.session import get_db
 from app.models import LiveRoom, LiveRoomLog, LiveRoomLogVideo, LiveRoomStats
-from app.modules.live_rooms.schemas import LiveRoomCreate, LiveRoomOut, LiveRoomUpdate, MonitorUpdate
+from app.modules.live_rooms.schemas import LiveRoomCreate, LiveRoomOut, LiveRoomUpdate, MonitorUpdate, RecordingStop
 from app.modules.live_rooms.checker import LiveChecker
 from app.services.platforms.recorder_factory import create_recorder
 from app.modules.recording.status import get_recording_status
+from app.modules.recording.tasks import get_recording_tasks
+from app.modules.recording.disk import DiskSpaceError
 
 
 router = APIRouter(prefix="/api", tags=["录制管理"])
@@ -43,7 +45,11 @@ async def list_rooms(keyword: str | None = Query(default=None), db: AsyncSession
 
 @router.get("/recording-status")
 async def recording_status(request: Request):
-    return get_recording_status(request.app).snapshot()
+    controls = get_recording_tasks(request.app).control_snapshot()
+    for room_id, session in get_recording_status(request.app).snapshot().items():
+        if controls.get(room_id, {}).get("state") != "stopping":
+            controls[room_id] = session
+    return controls
 
 
 @router.post("/rooms", response_model=LiveRoomOut, status_code=status.HTTP_201_CREATED)
@@ -89,26 +95,95 @@ async def get_room(room_id: int, db: AsyncSession = Depends(get_db)):
     return room
 
 
+async def refresh_control_room(room, db, key):
+    await db.refresh(room)
+    if room.del_flag != 0:
+        raise HTTPException(status_code=404, detail="直播间不存在")
+    if (room.platform, str(room.room_id)) != key:
+        raise HTTPException(status_code=409, detail="直播间信息已变化，请刷新后重试")
+
+
 @router.put("/rooms/{room_id}", response_model=LiveRoomOut)
-async def update_room(room_id: int, payload: LiveRoomUpdate, db: AsyncSession = Depends(get_db)):
+async def update_room(room_id: int, payload: LiveRoomUpdate, request: Request, db: AsyncSession = Depends(get_db)):
     room = await get_room(room_id, db)
     data = payload.model_dump(exclude_unset=True)
     if "platform" in data and data["platform"] is not None:
         data["platform"] = normalize_platform(data["platform"])
-    for key, value in data.items():
-        setattr(room, key, value)
-    await db.commit()
+    manager = get_recording_tasks(request.app)
+    key = (room.platform, str(room.room_id))
+    async with manager.control_lock(key):
+        await refresh_control_room(room, db, key)
+        was_monitoring = room.monitor_enabled
+        identity_changed = any(name in data and data[name] != getattr(room, name) for name in ("platform", "room_id"))
+        if identity_changed and (manager.is_recording(key) or key in manager.checks):
+            raise HTTPException(status_code=409, detail="请先停止该直播间录制，再修改平台或房间号")
+        for name, value in data.items():
+            setattr(room, name, value)
+        await db.commit()
+        if (was_monitoring and data.get("monitor_enabled") is False) or identity_changed:
+            manager.disabled_keys.add(key)
+            await manager.stop_room(key)
+        if room.monitor_enabled:
+            manager.disabled_keys.discard((room.platform, str(room.room_id)))
     await db.refresh(room)
     return room
 
 
 @router.patch("/rooms/{room_id}/monitor", response_model=LiveRoomOut)
-async def update_monitor(room_id: int, payload: MonitorUpdate, db: AsyncSession = Depends(get_db)):
+async def update_monitor(room_id: int, payload: MonitorUpdate, request: Request, db: AsyncSession = Depends(get_db)):
     room = await get_room(room_id, db)
-    room.monitor_enabled = payload.monitor_enabled
-    await db.commit()
+    manager = get_recording_tasks(request.app)
+    key = (room.platform, str(room.room_id))
+    async with manager.control_lock(key):
+        await refresh_control_room(room, db, key)
+        room.monitor_enabled = payload.monitor_enabled
+        await db.commit()
+        if payload.monitor_enabled:
+            manager.disabled_keys.discard(key)
+            request.app.state.recording_settings.changed.set()
+        else:
+            manager.disabled_keys.add(key)
+            await manager.stop_room(key)
     await db.refresh(room)
     return room
+
+
+@router.post("/rooms/{room_id}/recording/start")
+async def start_room_recording(room_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    room = await get_room(room_id, db)
+    manager = get_recording_tasks(request.app)
+    key = (room.platform, str(room.room_id))
+    async with manager.control_lock(key):
+        await refresh_control_room(room, db, key)
+        recorder = create_recorder(request.app, {column.name: getattr(room, column.name) for column in LiveRoom.__table__.columns})
+        if recorder is None:
+            raise HTTPException(status_code=400, detail="不支持的平台")
+        token = manager.begin_check(key, manual=True)
+        if token is None:
+            raise HTTPException(status_code=409, detail="该房间已有检查或录制任务，或服务正在停止")
+    try:
+        return await recorder.start(manual=True, token=token)
+    except DiskSpaceError as exc:
+        raise HTTPException(status_code=507, detail=str(exc)) from exc
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="检查直播状态超时") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="检查直播状态失败，请检查平台配置和运行日志") from exc
+
+
+@router.post("/rooms/{room_id}/recording/stop")
+async def stop_room_recording(room_id: int, payload: RecordingStop, request: Request, db: AsyncSession = Depends(get_db)):
+    room = await get_room(room_id, db)
+    manager = get_recording_tasks(request.app)
+    key = (room.platform, str(room.room_id))
+    async with manager.control_lock(key):
+        await refresh_control_room(room, db, key)
+        if payload.disable_monitor:
+            room.monitor_enabled = False
+            await db.commit()
+            manager.disabled_keys.add(key)
+        await manager.stop_room(key)
+    return {"status": "stopped", "monitor_enabled": room.monitor_enabled}
 
 
 @router.get("/rooms/{room_id}/live-status")
@@ -126,10 +201,16 @@ async def check_room_live_status(room_id: int, db: AsyncSession = Depends(get_db
 
 
 @router.delete("/rooms/{room_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_room(room_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_room(room_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     room = await get_room(room_id, db)
-    room.del_flag = 1
-    await db.commit()
+    manager = get_recording_tasks(request.app)
+    key = (room.platform, str(room.room_id))
+    async with manager.control_lock(key):
+        await refresh_control_room(room, db, key)
+        room.del_flag = 1
+        await db.commit()
+        manager.disabled_keys.add(key)
+        await manager.stop_room(key)
 
 
 @router.get("/logs")

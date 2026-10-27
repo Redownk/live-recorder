@@ -15,6 +15,9 @@ class RecordingSettings(Base):
     save_path: Mapped[str] = mapped_column(String(1024))
     filename_template: Mapped[str] = mapped_column(String(255))
     check_interval_seconds: Mapped[int] = mapped_column(Integer)
+    disk_protection_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
+    disk_min_free_gb: Mapped[int] = mapped_column(Integer, default=5, server_default=text("5"))
+    disk_stop_free_gb: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
 
 
 class LiveRoom(Base):

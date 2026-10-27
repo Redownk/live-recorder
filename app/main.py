@@ -20,6 +20,7 @@ from app.modules.settings.service import init_recording_settings
 from app.modules.recording.status import RecordingStatusTracker
 from app.modules.recording.tasks import RecordingTaskManager, get_recording_tasks
 from app.modules.recording.recovery import recover_interrupted_recordings
+from app.modules.recording.disk import get_disk_guard
 from app.modules.video_processing.service import VideoProcessingManager
 
 
@@ -63,9 +64,11 @@ async def startup_event():
         app.state.video_processing = VideoProcessingManager(app.state.recording_tasks)
         await recover_interrupted_recordings(app)
         crawler_manager.init_app(app)
+        get_disk_guard(app).start()
         if local_config.get("crawler", {}).get("auto_start", False):
             await crawler_manager.start()
     except BaseException:
+        await get_disk_guard(app).shutdown()
         engine = getattr(app.state, "engine", None)
         if engine is not None:
             await engine.dispose()
@@ -80,6 +83,7 @@ async def shutdown_event():
     logger.info("服务关闭中...")
     tasks = get_recording_tasks(app)
     tasks.closing = True
+    await get_disk_guard(app).shutdown()
     try:
         try:
             await crawler_manager.shutdown()

@@ -33,6 +33,7 @@ function query(values = {}) {
 
 export const api = {
   settings: () => request('/api/settings'),
+  diskStatus: () => request('/api/settings/disk'),
   directories: (params) => request(`/api/settings/directories${query(params)}`),
   processingFiles: (params) => request(`/api/processing/files${query(params)}`),
   processingCapabilities: () => request('/api/processing/capabilities'),
@@ -48,6 +49,8 @@ export const api = {
   monitor: (id, enabled) => request(`/api/rooms/${id}/monitor`, { method: 'PATCH', body: { monitor_enabled: enabled } }),
   deleteRoom: (id) => request(`/api/rooms/${id}`, { method: 'DELETE' }),
   liveStatus: (id) => request(`/api/rooms/${id}/live-status`),
+  startRecording: (id) => request(`/api/rooms/${id}/recording/start`, { method: 'POST' }),
+  stopRecording: (id, disableMonitor) => request(`/api/rooms/${id}/recording/stop`, { method: 'POST', body: { disable_monitor: disableMonitor } }),
   logs: (params) => request(`/api/logs${query({ limit: 100, ...params })}`),
   videos: (params) => request(`/api/videos${query({ limit: 100, ...params })}`),
   videoFileUrl: (id) => `${baseUrl}/api/videos/${id}/file`,

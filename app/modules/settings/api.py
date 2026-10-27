@@ -12,6 +12,13 @@ from app.shared.filesystem.access import check_directory_access
 router = APIRouter(prefix="/api/settings", tags=["录制设置"])
 
 
+@router.get("/disk")
+async def disk_status(request: Request):
+    from app.modules.recording.disk import get_disk_guard
+
+    return JSONResponse(await get_disk_guard(request.app).snapshot(), headers={"Cache-Control": "no-store"})
+
+
 @router.get("/directories")
 async def browse_directories(request: Request, path: str | None = Query(default=None, max_length=1024), offset: int = Query(default=0, ge=0, le=1000000), limit: int = Query(default=200, ge=1, le=500)):
     check_directory_access(request)

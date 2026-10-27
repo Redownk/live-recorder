@@ -3,6 +3,7 @@ import asyncio
 from sqlalchemy import text
 from app.services.platforms.recorder_factory import create_recorder
 from app.core.logger import setup_logging, get_logger
+from app.modules.recording.disk import DiskSpaceError
 
 setup_logging()
 logger = get_logger(__name__)
@@ -48,6 +49,8 @@ async def crawler_loop(app, stop_event):
                             room.get("platform"),
                             room.get("room_id"),
                         )
+                except DiskSpaceError as exc:
+                    logger.warning("磁盘保护跳过录制 platform=%s room_id=%s: %s", room.get("platform"), room.get("room_id"), exc)
                 except Exception:
                     logger.exception(
                         "爬虫异常 platform=%s room_id=%s",

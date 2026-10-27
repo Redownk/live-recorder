@@ -157,6 +157,15 @@ input[type="radio"] { width: 17px; height: 17px; accent-color: #22766a; }
 .template-tokens dt { color: #7c8491; margin-bottom: 4px; }
 .template-tokens dd { margin: 0; overflow-wrap: anywhere; }
 .interval-field { max-width: 220px; }
+.disk-thresholds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.disk-thresholds input { min-width: 0; width: 100%; }
+.disk-status { display: flex; gap: 12px; padding: 12px 0; font-size: 13px; border-bottom: 1px solid #e0e4e9; margin-bottom: 12px; }
+.disk-status > svg { flex-shrink: 0; margin-top: 2px; }
+.disk-status > div { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.disk-status strong { font-weight: 500; }
+.disk-status .disk-path { color: #7c8491; font-size: 12px; }
+.disk-status.warning { color: #966114; border-color: #e5c58d; }
+.disk-status.critical, .disk-status.unavailable { color: #ba3939; border-color: #e8b3b3; }
 .input-unit { display: flex; align-items: center; gap: 12px; }
 .input-unit span { color: #7c8491; }
 .settings-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
@@ -181,5 +190,6 @@ input[type="radio"] { width: 17px; height: 17px; accent-color: #22766a; }
   .toolbar-actions { margin-left: auto; }
   .toast { bottom: 16px; right: 16px; }
   .template-tokens { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .disk-thresholds { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) { .spinning { animation: none; } }

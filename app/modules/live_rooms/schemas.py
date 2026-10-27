@@ -46,3 +46,9 @@ class LiveRoomOut(LiveRoomBase):
 
 class MonitorUpdate(BaseModel):
     monitor_enabled: bool
+
+
+class RecordingStop(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    disable_monitor: bool = Field(default=True, strict=True)

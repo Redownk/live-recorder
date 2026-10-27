@@ -26,21 +26,47 @@ class BaseRecorder:
     def _log_message(self, message: str) -> str:
         return f"[platform={self.platform} room_id={self.room_id}] {message}"
 
-    async def start(self):
+    async def start(self, manual=False, token=None):
         manager = get_recording_tasks(self.app)
         key = (self.platform, str(self.room_id))
-        token = manager.begin_check(key)
+        if self.room.get("id") is not None:
+            manager.room_ids[key] = self.room["id"]
+        token = token if token is not None else manager.begin_check(key, manual=manual)
         if token is None:
             logger.info(self._log_message("已有检查或录制任务，跳过"))
-            return
+            return {"status": "busy"}
+        if manager.checks.get(key) is not token:
+            return {"status": "stopped"}
         logger.info(self._log_message("开始检测直播状态"))
         try:
-            live_info = await self.check_live_status()
+            from app.modules.recording.disk import DiskSpaceError, get_disk_guard
+            from app.modules.settings.service import resolve_save_path
+
+            guard = get_disk_guard(self.app)
+            directory = resolve_save_path(self.app.state.recording_settings.settings.save_path)
+            await guard.ensure_can_start(directory)
+            if manager.checks.get(key) is not token:
+                return {"status": "stopped"}
+            check = asyncio.create_task(self.check_live_status())
+            manager.check_tasks[key] = check
+            try:
+                live_info = await asyncio.wait_for(check, timeout=30)
+            except asyncio.CancelledError:
+                if asyncio.current_task().cancelling():
+                    raise
+                return {"status": "stopped"}
             if not live_info["is_live"]:
                 logger.info(self._log_message("未开播，跳过录制: %s"), live_info)
-                return
+                manager.notices.pop(key, None)
+                return {"status": "offline"}
+            await guard.ensure_can_start(directory)
             logger.info(self._log_message("检测到开播，准备录制: %s"), live_info.get("title") or live_info.get("owner"))
-            manager.start_recording(key, lambda: self.record(live_info), self.finish_recording_task)
+            started = manager.start_recording(key, lambda: self.record(live_info), self.finish_recording_task,
+                                              token=token, manual=manual)
+            return {"status": "started" if started else "stopped"}
+        except DiskSpaceError as exc:
+            manager.notices[key] = {"state": "disk_blocked", "message": str(exc)}
+            raise
         finally:
             manager.end_check(key, token)
 
@@ -56,6 +82,7 @@ class BaseRecorder:
             prefix = getattr(self, "_output_prefix", None)
             if prefix is not None:
                 get_recording_tasks(self.app).output_prefixes.discard(prefix)
+                get_recording_tasks(self.app).output_paths.pop((self.platform, str(self.room_id)), None)
 
     async def stop_process(self, process):
         if process is None or process.returncode is not None:
@@ -83,6 +110,7 @@ class BaseRecorder:
         prefix = await create_output_prefix(self.app, self.room, live_info, start_time)
         self._output_prefix = Path(prefix).resolve()
         get_recording_tasks(self.app).output_prefixes.add(self._output_prefix)
+        get_recording_tasks(self.app).output_paths[(self.platform, str(self.room_id))] = self._output_prefix
         return prefix
 
     def recording_started(self, log_id):
@@ -93,6 +121,7 @@ class BaseRecorder:
 
     def recording_finished(self, log_id):
         get_recording_status(self.app).finished(self.room["id"], log_id)
+        get_recording_tasks(self.app).phases[(self.platform, str(self.room_id))] = "finishing"
 
     async def _get_max_online_count(self, log_id):
         async with get_db_session(self.app) as db:
@@ -123,6 +152,7 @@ class BaseRecorder:
         import os
 
         logger.info(self._log_message("开始后处理"))
+        get_recording_tasks(self.app).phases[(self.platform, str(self.room_id))] = "merging"
 
         if segment_count <= 0:
             logger.info(self._log_message("没有分段文件，跳过处理"))
@@ -137,6 +167,14 @@ class BaseRecorder:
                 break
         if not segments:
             logger.info(self._log_message("没有有效分段文件，跳过处理"))
+            return
+
+        from app.modules.recording.disk import DiskSpaceError, get_disk_guard
+
+        try:
+            await get_disk_guard(self.app).ensure_can_start(segments[0].parent, sum(path.stat().st_size for path in segments))
+        except DiskSpaceError as exc:
+            logger.warning(self._log_message("%s"), exc)
             return
 
         ffmpeg_path = get_ffmpeg_path()

@@ -3,6 +3,7 @@ import { computed, inject, nextTick, onUnmounted, reactive, ref, watch } from 'v
 import { FolderOpen, RefreshCw, RotateCcw, Save } from '@lucide/vue';
 import { api } from '../api.js';
 import DirectoryPicker from '../components/DirectoryPicker.vue';
+import DiskStatus from '../components/DiskStatus.vue';
 
 const notify = inject('notify');
 const presets = [
@@ -16,7 +17,8 @@ const tokens = [
   ['platform', '平台'], ['owner', '主播'], ['remark', '备注'], ['room_id', '房间号'], ['title', '标题'],
   ['date', '日期'], ['time', '时间'], ['timestamp', '日期时间'], ['record_id', '唯一编号'],
 ];
-const draft = reactive({ save_path: '', filename_template: '', check_interval_seconds: 5 });
+const diskStatus = ref(null);
+const draft = reactive({ save_path: '', filename_template: '', check_interval_seconds: 5, disk_protection_enabled: true, disk_min_free_gb: 5, disk_stop_free_gb: 1 });
 const saved = ref(null);
 const loading = ref(true);
 const saving = ref(false);
@@ -33,7 +35,8 @@ let previewId = 0;
 let disposed = false;
 const dirty = computed(() => saved.value && Object.keys(draft).some((key) => draft[key] !== saved.value[key]));
 function applySettings(data) {
-  saved.value = { save_path: data.save_path, filename_template: data.filename_template, check_interval_seconds: data.check_interval_seconds };
+  saved.value = { save_path: data.save_path, filename_template: data.filename_template, check_interval_seconds: data.check_interval_seconds,
+    disk_protection_enabled: data.disk_protection_enabled ?? true, disk_min_free_gb: data.disk_min_free_gb ?? 5, disk_stop_free_gb: data.disk_stop_free_gb ?? 1 };
   Object.assign(draft, saved.value);
   rule.value = presets.some((item) => item.value === data.filename_template) ? data.filename_template : 'custom';
   preview.value = data;
@@ -70,7 +73,7 @@ async function save() {
   saveError.value = '';
   try {
     const data = await api.saveSettings({ ...draft });
-    if (!disposed) { applySettings(data); notify('录制设置已保存'); }
+    if (!disposed) { applySettings(data); diskStatus.value?.refresh(); notify('录制设置已保存'); }
   } catch (error) { if (!disposed) saveError.value = error.message; }
   finally { if (!disposed) saving.value = false; }
 }
@@ -118,6 +121,15 @@ load();
         <section class="settings-section">
           <h2>直播检查</h2>
           <label class="field interval-field">检查周期<div class="input-unit"><input v-model.number="draft.check_interval_seconds" type="number" aria-label="检查周期" required min="1" max="86400" step="1" /><span aria-hidden="true">秒</span></div></label>
+        </section>
+        <section class="settings-section">
+          <h2>磁盘空间保护</h2>
+          <DiskStatus ref="diskStatus" />
+          <label class="checkbox-label"><input v-model="draft.disk_protection_enabled" type="checkbox" />启用磁盘空间保护</label>
+          <div class="disk-thresholds">
+            <label class="field">暂停新录制阈值<div class="input-unit"><input v-model.number="draft.disk_min_free_gb" type="number" aria-label="暂停新录制阈值" min="2" max="1048576" step="1" required :disabled="!draft.disk_protection_enabled" /><span>GiB</span></div></label>
+            <label class="field">停止录制阈值<div class="input-unit"><input v-model.number="draft.disk_stop_free_gb" type="number" aria-label="停止录制阈值" min="1" :max="draft.disk_min_free_gb - 1" step="1" required :disabled="!draft.disk_protection_enabled" /><span>GiB</span></div></label>
+          </div>
         </section>
       </fieldset>
       <p v-if="saveError" class="error-banner" role="alert">{{ saveError }}</p>

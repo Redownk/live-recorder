@@ -6,7 +6,7 @@ from pathlib import Path
 from string import Formatter
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.config import ROOT_DIR
 from app.core.session import get_db_session
@@ -24,6 +24,15 @@ class RecordingOptions(BaseModel):
     save_path: str = Field(default="./record", min_length=1, max_length=1024)
     filename_template: str = Field(default=DEFAULT_FILENAME_TEMPLATE, min_length=1, max_length=255)
     check_interval_seconds: int = Field(default=5, ge=1, le=86400, strict=True)
+    disk_protection_enabled: bool = Field(default=True, strict=True)
+    disk_min_free_gb: int = Field(default=5, ge=1, le=1048576, strict=True)
+    disk_stop_free_gb: int = Field(default=1, ge=1, le=1048576, strict=True)
+
+    @model_validator(mode="after")
+    def validate_disk_thresholds(self):
+        if self.disk_stop_free_gb >= self.disk_min_free_gb:
+            raise ValueError("停止录制阈值必须小于暂停新录制阈值")
+        return self
 
     @field_validator("save_path")
     @classmethod
@@ -132,6 +141,9 @@ async def create_output_prefix(app, room, live_info, start_time: datetime) -> st
     output = output.resolve()
     if not output.is_relative_to(directory):
         raise ValueError("录制路径不能超出保存目录")
+    from app.modules.recording.disk import get_disk_guard
+
+    await get_disk_guard(app).ensure_can_start(output.parent)
     existing_output = re.compile(re.escape(output.name) + r"(?:\.(?:ts|flv|mp4)|_\d+\.(?:ts|flv)|_filelist\.txt)$", re.IGNORECASE)
     if output in manager.claimed_output_prefixes or any(existing_output.fullmatch(path.name) for path in output.parent.iterdir()):
         raise FileExistsError(f"录制文件名已被使用，请调整命名规则以区分录制: {output}")

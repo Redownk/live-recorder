@@ -1,9 +1,10 @@
 <script setup>
 import { inject, nextTick, onUnmounted, ref, watch } from 'vue';
-import { Check, History, Pencil, Plus, Radio, RefreshCw, Search, Trash2, X } from '@lucide/vue';
+import { Check, History, Pencil, Play, Plus, Radio, RefreshCw, Search, Square, Trash2, X } from '@lucide/vue';
 import { api } from '../api.js';
 import { formatDuration, formatTime, platformName, safeUrl } from '../format.js';
 import ModalDialog from '../components/ModalDialog.vue';
+import DiskStatus from '../components/DiskStatus.vue';
 
 const notify = inject('notify');
 const rooms = ref([]);
@@ -15,6 +16,8 @@ const selected = ref(null);
 const saving = ref(false);
 const formError = ref('');
 const rowBusy = ref([]);
+const startBusy = ref([]);
+const disableMonitor = ref(true);
 const statuses = ref({});
 const statusLoaded = ref(false);
 const statusError = ref('');
@@ -48,11 +51,11 @@ async function loadRecordingStatus() {
 function recordingLabel(room) {
   if (statusError.value) return '状态不可用';
   if (!statusLoaded.value) return '获取中…';
-  return { recording: '录制中', reconnecting: '重连中' }[statuses.value[room.id]?.state] || '未录制';
+  return { recording: '录制中', reconnecting: '重连中', checking: '检查中', preparing: '准备中', finishing: '结束中', merging: '合并中', stopping: '停止中', disk_blocked: '空间不足' }[statuses.value[room.id]?.state] || '未录制';
 }
 function recordingDuration(room) {
   const status = statuses.value[room.id];
-  if (statusError.value || !statusLoaded.value || !status) return '-';
+  if (statusError.value || !statusLoaded.value || !['recording', 'reconnecting'].includes(status?.state)) return '-';
   return formatDuration(status.elapsed_seconds + Math.max(0, statusTick.value - statusReceivedAt) / 1000);
 }
 
@@ -74,6 +77,7 @@ function openModal(type, room = null) {
   cancelRemark();
   selected.value = room;
   formError.value = '';
+  disableMonitor.value = true;
   draft.value = type === 'edit'
     ? { owner: room.owner || '', title: room.title || '', remark: room.remark || '', monitor_enabled: room.monitor_enabled }
     : { room_url: '', remark: '', monitor_enabled: true };
@@ -104,6 +108,30 @@ async function removeRoom() {
   } catch (err) { formError.value = err.message; }
   finally { saving.value = false; }
 }
+async function startRecording(room) {
+  if (startBusy.value.includes(room.id)) return;
+  startBusy.value.push(room.id);
+  try {
+    const result = await api.startRecording(room.id);
+    if (!disposed) notify({ started: '已提交录制任务', offline: '当前未开播', busy: '已有检查或录制任务', stopped: '录制请求已停止' }[result.status] || '操作完成');
+  } catch (err) { if (!disposed) notify(err.message, 'error'); }
+  finally {
+    startBusy.value = startBusy.value.filter((id) => id !== room.id);
+    await loadRecordingStatus();
+  }
+}
+async function stopRecording() {
+  if (saving.value) return;
+  saving.value = true;
+  formError.value = '';
+  try {
+    await api.stopRecording(selected.value.id, disableMonitor.value);
+    modal.value = null;
+    notify(disableMonitor.value ? '录制已停止，监控已暂停' : '本次录制已停止');
+    await refreshRooms();
+  } catch (err) { formError.value = err.message; }
+  finally { saving.value = false; }
+}
 async function roomAction(room, action, event) {
   if (rowBusy.value.includes(room.id)) return;
   rowBusy.value.push(room.id);
@@ -114,6 +142,7 @@ async function roomAction(room, action, event) {
     } else {
       const updated = await api.monitor(room.id, !room.monitor_enabled);
       Object.assign(room, updated);
+      await loadRecordingStatus();
     }
   } catch (err) { notify(err.message, 'error'); }
   finally {
@@ -174,6 +203,7 @@ loadRecordingStatus();
     </div>
     <p v-if="error" class="error-banner" role="alert">{{ error }}</p>
     <p v-if="statusError" class="error-banner" role="alert">录制状态获取失败：{{ statusError }}</p>
+    <DiskStatus compact />
     <div class="table-wrap" :aria-busy="loading">
       <table>
         <thead><tr><th>平台</th><th>主播 / 房间号</th><th>备注</th><th>标题</th><th>监控</th><th>录制状态</th><th>录制时长</th><th>最近开播</th><th class="actions-head">操作</th></tr></thead>
@@ -194,10 +224,12 @@ loadRecordingStatus();
             </td>
             <td class="title-cell">{{ room.title || '-' }}</td>
             <td><input type="checkbox" role="switch" :aria-label="`监控 ${room.owner || room.room_id}`" :checked="room.monitor_enabled" :disabled="rowBusy.includes(room.id)" @change="roomAction(room, 'monitor', $event)" /></td>
-            <td class="recording-state-cell"><span class="recording-state" :class="{ recording: !statusError && statuses[room.id]?.state === 'recording', reconnecting: !statusError && statuses[room.id]?.state === 'reconnecting' }">{{ recordingLabel(room) }}</span></td>
+            <td class="recording-state-cell"><span class="recording-state" :title="statuses[room.id]?.message" :class="{ recording: !statusError && statuses[room.id]?.state === 'recording', reconnecting: !statusError && statuses[room.id]?.state === 'reconnecting', 'error-text': statuses[room.id]?.state === 'disk_blocked' }">{{ recordingLabel(room) }}</span></td>
             <td class="recording-duration">{{ recordingDuration(room) }}</td>
             <td class="time-cell">{{ formatTime(room.last_live_time) }}</td>
             <td><div class="row-actions">
+              <button class="icon-button" title="立即录制" :aria-label="`录制 ${room.owner || room.room_id}`" :disabled="rowBusy.includes(room.id) || startBusy.includes(room.id) || ['recording', 'reconnecting', 'checking', 'preparing', 'finishing', 'merging', 'stopping'].includes(statuses[room.id]?.state)" @click="startRecording(room)"><Play :size="17" /></button>
+              <button class="icon-button danger" title="停止录制" :aria-label="`停止录制 ${room.owner || room.room_id}`" :disabled="saving || rowBusy.includes(room.id)" @click="openModal('stop', room)"><Square :size="17" /></button>
               <button class="icon-button" title="检查直播状态" :aria-label="`检查 ${room.owner || room.room_id}`" :disabled="rowBusy.includes(room.id)" @click="roomAction(room, 'check')"><Radio :size="17" /></button>
               <RouterLink class="icon-button" :to="{ path: '/logs', query: { room_id: room.id } }" title="录制日志" :aria-label="`日志 ${room.owner || room.room_id}`"><History :size="17" /></RouterLink>
               <button class="icon-button" title="编辑直播间" :aria-label="`编辑 ${room.owner || room.room_id}`" :disabled="remarkSaving" @click="openModal('edit', room)"><Pencil :size="17" /></button>
@@ -209,8 +241,8 @@ loadRecordingStatus();
       </table>
     </div>
     <p class="list-count">{{ rooms.length }} 个直播间</p>
-    <ModalDialog v-if="modal" :title="modal === 'add' ? '添加直播间' : modal === 'edit' ? '编辑直播间' : '删除直播间'" :busy="saving" @close="modal = null">
-      <form v-if="modal !== 'delete'" class="modal-body" @submit.prevent="saveRoom">
+    <ModalDialog v-if="modal" :title="modal === 'add' ? '添加直播间' : modal === 'edit' ? '编辑直播间' : modal === 'stop' ? '停止录制' : '删除直播间'" :busy="saving" @close="modal = null">
+      <form v-if="modal === 'add' || modal === 'edit'" class="modal-body" @submit.prevent="saveRoom">
         <label v-if="modal === 'add'" class="field">直播间 URL<input v-model="draft.room_url" type="url" required autofocus placeholder="https://live.douyin.com/…" :disabled="saving" /></label>
         <template v-else>
           <label class="field">主播昵称<input v-model="draft.owner" maxlength="255" :disabled="saving" /></label>
@@ -220,6 +252,13 @@ loadRecordingStatus();
         <label class="checkbox-label"><input v-model="draft.monitor_enabled" type="checkbox" :disabled="saving" />启用监控</label>
         <p v-if="formError" class="error-text" role="alert">{{ formError }}</p>
         <footer class="modal-actions"><button type="button" :disabled="saving" @click="modal = null">取消</button><button type="submit" class="primary" :disabled="saving">{{ saving ? '提交中…' : modal === 'add' ? '添加' : '保存' }}</button></footer>
+      </form>
+      <form v-else-if="modal === 'stop'" class="modal-body" @submit.prevent="stopRecording">
+        <p>{{ selected.owner || selected.room_id }}</p>
+        <label class="checkbox-label"><input v-model="disableMonitor" type="radio" :value="true" :disabled="saving" />停止并暂停监控</label>
+        <label class="checkbox-label"><input v-model="disableMonitor" type="radio" :value="false" :disabled="saving" />停止本次，保留监控</label>
+        <p v-if="formError" class="error-text" role="alert">{{ formError }}</p>
+        <footer class="modal-actions"><button type="button" :disabled="saving" @click="modal = null">取消</button><button type="submit" class="danger-solid" :disabled="saving">{{ saving ? '停止中…' : '确认停止' }}</button></footer>
       </form>
       <div v-else class="modal-body">
         <p>确定删除「{{ selected.owner || selected.room_id }}」？</p>

@@ -39,6 +39,7 @@ class CrawlerManager:
             had_work = self.status() or bool(manager.tasks)
             self.stopping = True
             manager.paused = True
+            manager.stopping_all = True
             try:
                 try:
                     await self._stop_crawler()
@@ -47,6 +48,7 @@ class CrawlerManager:
                 await recover_interrupted_recordings(self.app)
             finally:
                 self.stopping = False
+                manager.stopping_all = False
             return "stopped" if had_work else "not running"
 
     async def shutdown(self):
