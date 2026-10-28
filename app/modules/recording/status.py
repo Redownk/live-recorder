@@ -9,6 +9,7 @@ class RecordingSession:
     started_at: str
     started_monotonic: float
     state: str = "recording"
+    health: dict | None = None
 
 
 class RecordingStatusTracker:
@@ -36,6 +37,11 @@ class RecordingStatusTracker:
         if session is not None and session.log_id == log_id:
             del self.sessions[room_id]
 
+    def health_updated(self, room_id: int, log_id: int, health):
+        session = self.sessions.get(room_id)
+        if session is not None and session.log_id == log_id:
+            session.health = health
+
     def snapshot(self):
         now = monotonic()
         return {
@@ -44,6 +50,7 @@ class RecordingStatusTracker:
                 "log_id": session.log_id,
                 "started_at": session.started_at,
                 "elapsed_seconds": max(0, int(now - session.started_monotonic)),
+                **({"health": session.health} if session.health is not None else {}),
             }
             for room_id, session in self.sessions.items()
         }

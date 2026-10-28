@@ -5,11 +5,14 @@ from pathlib import Path
 
 from app.core.session import get_db_session
 from app.core.logger import get_logger
+from app.core.log_context import recording_log_context
 from app.services.platforms.recorder import get_ffmpeg_path
 from app.models import LiveRoomLogVideo
 from app.modules.settings.service import create_output_prefix
 from app.modules.recording.status import get_recording_status
 from app.modules.recording.tasks import get_recording_tasks
+from app.modules.recording.health import RecordingHealthError, RecordingHealthSample, recording_file_size
+from app.modules.recording.disk import DiskSpaceError
 from sqlalchemy import text
 
 
@@ -22,10 +25,151 @@ class BaseRecorder:
         self.room = room
         self.room_id = room["room_id"]
         self.platform = room["platform"]
+        self._health_restart_count = 0
+        self._health_last_error = None
+        self._health_failed = False
+        self._segment_health_error = None
+
+    def health_options(self):
+        from app.modules.settings.service import RecordingOptions
+
+        manager = getattr(self.app.state, "recording_settings", None)
+        return manager.settings if manager is not None else RecordingOptions()
+
+    async def spawn_recording_process(self, command):
+        command = [command[0], "-progress", "pipe:1", "-stats_period", "1", "-nostats", *command[1:]]
+        return await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+
+    async def wait_recording_process(self, process, output_file, log_id):
+        self._segment_health_error = None
+        stream = getattr(process, "stdout", None)
+        sample = RecordingHealthSample(progress_expected=stream is not None)
+        errors = bytearray()
+
+        def publish():
+            get_recording_status(self.app).health_updated(
+                self.room["id"], log_id,
+                sample.snapshot(self.health_options(), self._health_restart_count, self._health_last_error),
+            )
+
+        async def read_progress():
+            if stream is not None:
+                while line := await stream.readline():
+                    sample.progress_line(line.decode("utf-8", errors="replace").strip())
+
+        async def read_errors():
+            stderr = getattr(process, "stderr", None)
+            if stderr is not None:
+                while chunk := await stderr.read(4096):
+                    errors.extend(chunk)
+                    del errors[:-4096]
+
+        progress = asyncio.create_task(read_progress(), name="recording-progress")
+        error_reader = asyncio.create_task(read_errors(), name="recording-errors")
+        waiting = asyncio.create_task(process.wait(), name="recording-process-wait")
+        publish()
+        try:
+            while True:
+                done, _ = await asyncio.wait({waiting}, timeout=5)
+                if done:
+                    return await waiting
+                sample.file_observation(await asyncio.to_thread(recording_file_size, output_file))
+                if waiting.done():
+                    return await waiting
+                options = self.health_options()
+                publish()
+                if options.health_check_enabled:
+                    failure = sample.failure(options)
+                    if failure:
+                        self._segment_health_error = failure
+                        await self.stop_process(process)
+                        return await waiting
+        finally:
+            # Reap the child before disposing its wait task, including manual/disk stops.
+            await self.stop_process(process)
+            if not error_reader.done() and getattr(process, "returncode", None) is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(error_reader), timeout=1)
+                except (TimeoutError, OSError):
+                    pass
+            for task in (waiting, progress, error_reader):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(waiting, progress, error_reader, return_exceptions=True)
+            if (not asyncio.current_task().cancelling() and getattr(process, "returncode", 0)
+                    and self._segment_health_error is None):
+                logger.warning(self._log_message("FFmpeg 异常退出: %s"), errors.decode("utf-8", errors="replace") or "无错误输出",
+                               extra={"event_code": "ffmpeg_exit"})
+
+    async def complete_recording_segment(self, output_file, log_id):
+        path = Path(output_file)
+        size = recording_file_size(path)
+        unhealthy = self._segment_health_error is not None
+        if unhealthy:
+            # Even a short nonempty failed segment is retained; the next attempt gets a new name.
+            await self.health_failure(log_id, self._segment_health_error)
+            return 1
+        if size > 1024:
+            return 1
+        if path.exists():
+            path.unlink()
+        return 0
+
+    async def health_failure(self, log_id, message):
+        options = self.health_options()
+        self._health_last_error = message
+        exhausted = self._health_restart_count >= options.health_max_restarts
+        if exhausted:
+            self._health_failed = True
+            get_recording_tasks(self.app).disabled_keys.add((self.platform, str(self.room_id)))
+        else:
+            self._health_restart_count += 1
+        logger.warning(self._log_message("健康检测异常: %s; 自动恢复 %s/%s; %s"), message,
+                       self._health_restart_count, options.health_max_restarts, "暂停监控" if exhausted else "重新获取直播流",
+                       extra={"event_code": "recording_health"})
+        try:
+            async with get_db_session(self.app) as db:
+                await db.execute(text("UPDATE live_room_log SET health_restart_count=:count, health_last_error=:error WHERE id=:id"),
+                                 {"count": self._health_restart_count, "error": message, "id": log_id})
+                if exhausted:
+                    await db.execute(text("UPDATE live_room SET monitor_enabled=0 WHERE id=:id"), {"id": self.room["id"]})
+                await db.commit()
+        except Exception:
+            logger.exception(self._log_message("健康检测结果写入失败"))
+        tracker = get_recording_status(self.app)
+        session = tracker.sessions.get(self.room["id"])
+        if session is not None and session.log_id == log_id:
+            tracker.health_updated(self.room["id"], log_id, {**(session.health or {}), "state": "recovering",
+                "restart_count": self._health_restart_count, "last_error": message})
+        if exhausted:
+            raise RecordingHealthError(f"健康检测自动恢复次数已用尽，已暂停该房间监控：{message}")
+
+    async def recover_recording_stream(self, previous_url):
+        from app.modules.recording.disk import get_disk_guard
+
+        prefix = getattr(self, "_output_prefix", None)
+        if prefix is not None:
+            try:
+                await get_disk_guard(self.app).ensure_can_start(prefix.parent)
+            except DiskSpaceError:
+                self._health_failed = True
+                raise
+        info = await asyncio.wait_for(self.check_live_status(), timeout=30)
+        if not info.get("is_live"):
+            return None
+        await asyncio.sleep(min(5 * self._health_restart_count, 30))
+        stream_url = await asyncio.wait_for(self.refresh_stream_url(info, previous_url), timeout=30)
+        if not isinstance(stream_url, str) or not stream_url.strip():
+            raise ValueError("重新获取直播流失败")
+        return stream_url
+
+    async def refresh_stream_url(self, live_info, previous_url):
+        return previous_url
 
     def _log_message(self, message: str) -> str:
         return f"[platform={self.platform} room_id={self.room_id}] {message}"
 
+    @recording_log_context
     async def start(self, manual=False, token=None):
         manager = get_recording_tasks(self.app)
         key = (self.platform, str(self.room_id))
@@ -67,9 +211,13 @@ class BaseRecorder:
         except DiskSpaceError as exc:
             manager.notices[key] = {"state": "disk_blocked", "message": str(exc)}
             raise
+        except Exception:
+            logger.exception(self._log_message("直播状态检查失败"), extra={"event_code": "live_check"})
+            raise
         finally:
             manager.end_check(key, token)
 
+    @recording_log_context
     async def finish_recording_task(self):
         try:
             log_id = getattr(self, "_log_id", None)
@@ -147,6 +295,7 @@ class BaseRecorder:
             })
             return result.scalar()
 
+    @recording_log_context
     async def _post_process(self, file_name, segment_count, log_id):
 
         import os
@@ -158,16 +307,19 @@ class BaseRecorder:
             logger.info(self._log_message("没有分段文件，跳过处理"))
             return
 
-        segments = []
+        formats = {}
         for extension in ("ts", "flv"):
             segments = [Path(f"{file_name}_{i}.{extension}") for i in range(1, segment_count + 1)]
             segments = [path for path in segments if path.is_file() and path.stat().st_size > 0]
             if segments:
-                ext = extension
-                break
-        if not segments:
+                formats[extension] = segments
+        if len(formats) > 1:
+            logger.warning(self._log_message("录制流格式发生变化，保留全部 TS / FLV 分片，不自动合并"))
+            return
+        if not formats:
             logger.info(self._log_message("没有有效分段文件，跳过处理"))
             return
+        ext, segments = next(iter(formats.items()))
 
         from app.modules.recording.disk import DiskSpaceError, get_disk_guard
 
@@ -210,7 +362,7 @@ class BaseRecorder:
             await self.stop_process(process)
 
         if return_code != 0 or not os.path.isfile(merged_file) or os.path.getsize(merged_file) == 0:
-            logger.warning(self._log_message("合并失败，保留分段文件，退出码: %s"), return_code)
+            logger.warning(self._log_message("合并失败，保留分段文件，退出码: %s"), return_code, extra={"event_code": "processing"})
             return
 
         logger.info(self._log_message("分段合并完成"))

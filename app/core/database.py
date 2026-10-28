@@ -54,6 +54,10 @@ async def init_db(app, db_url: str):
                 ("disk_protection_enabled", "BOOLEAN NOT NULL DEFAULT 1"),
                 ("disk_min_free_gb", "INTEGER NOT NULL DEFAULT 5"),
                 ("disk_stop_free_gb", "INTEGER NOT NULL DEFAULT 1"),
+                ("health_check_enabled", "BOOLEAN NOT NULL DEFAULT 1"),
+                ("health_startup_timeout_seconds", "INTEGER NOT NULL DEFAULT 60"),
+                ("health_stall_timeout_seconds", "INTEGER NOT NULL DEFAULT 60"),
+                ("health_max_restarts", "INTEGER NOT NULL DEFAULT 3"),
             ):
                 if name not in settings_names:
                     await conn.execute(text(f"ALTER TABLE recording_settings ADD COLUMN {name} {definition}"))
@@ -65,8 +69,13 @@ async def init_db(app, db_url: str):
                 await conn.execute(text("ALTER TABLE live_room_log_video ADD COLUMN file_path TEXT"))
             await _ensure_sqlite_defaults(conn)
             log_columns = await conn.execute(text("PRAGMA table_info(live_room_log)"))
-            if "interrupted" not in {column[1] for column in log_columns.all()}:
+            log_names = {column[1] for column in log_columns.all()}
+            if "interrupted" not in log_names:
                 await conn.execute(text("ALTER TABLE live_room_log ADD COLUMN interrupted BOOLEAN NOT NULL DEFAULT 0"))
+            if "health_restart_count" not in log_names:
+                await conn.execute(text("ALTER TABLE live_room_log ADD COLUMN health_restart_count INTEGER NOT NULL DEFAULT 0"))
+            if "health_last_error" not in log_names:
+                await conn.execute(text("ALTER TABLE live_room_log ADD COLUMN health_last_error TEXT"))
 
 
 async def _ensure_sqlite_defaults(conn):
@@ -97,13 +106,15 @@ async def _ensure_sqlite_defaults(conn):
     await conn.execute(text("ALTER TABLE live_room_log RENAME TO live_room_log_old"))
     await conn.run_sync(Base.metadata.create_all)
     interrupted_value = "interrupted" if any(column["name"] == "interrupted" for column in columns) else "0"
+    health_count = "COALESCE(health_restart_count, 0)" if any(column["name"] == "health_restart_count" for column in columns) else "0"
+    health_error = "health_last_error" if any(column["name"] == "health_last_error" for column in columns) else "NULL"
     await conn.execute(text(f"""
         INSERT INTO live_room_log
             (id, live_room_id, platform, owner, title, start_live, end_live,
-             live_time, user_num, total_user, create_time, del_flag, interrupted)
+             live_time, user_num, total_user, create_time, del_flag, interrupted, health_restart_count, health_last_error)
         SELECT
             id, live_room_id, platform, owner, title, start_live, end_live,
-            live_time, user_num, total_user, COALESCE(create_time, CURRENT_TIMESTAMP), del_flag, {interrupted_value}
+            live_time, user_num, total_user, COALESCE(create_time, CURRENT_TIMESTAMP), del_flag, {interrupted_value}, {health_count}, {health_error}
         FROM live_room_log_old
     """))
     await conn.execute(text("DROP TABLE live_room_log_old"))

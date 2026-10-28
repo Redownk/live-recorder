@@ -18,6 +18,10 @@ class RecordingSettings(Base):
     disk_protection_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     disk_min_free_gb: Mapped[int] = mapped_column(Integer, default=5, server_default=text("5"))
     disk_stop_free_gb: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
+    health_check_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
+    health_startup_timeout_seconds: Mapped[int] = mapped_column(Integer, default=60, server_default=text("60"))
+    health_stall_timeout_seconds: Mapped[int] = mapped_column(Integer, default=60, server_default=text("60"))
+    health_max_restarts: Mapped[int] = mapped_column(Integer, default=3, server_default=text("3"))
 
 
 class LiveRoom(Base):
@@ -51,6 +55,8 @@ class LiveRoomLog(Base):
     start_live: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     end_live: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     interrupted: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("0"))
+    health_restart_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    health_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     live_time: Mapped[int | None] = mapped_column(Integer, nullable=True)
     user_num: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_user: Mapped[str | None] = mapped_column(String(64), nullable=True)

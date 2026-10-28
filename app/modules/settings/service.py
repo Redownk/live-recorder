@@ -27,6 +27,10 @@ class RecordingOptions(BaseModel):
     disk_protection_enabled: bool = Field(default=True, strict=True)
     disk_min_free_gb: int = Field(default=5, ge=1, le=1048576, strict=True)
     disk_stop_free_gb: int = Field(default=1, ge=1, le=1048576, strict=True)
+    health_check_enabled: bool = Field(default=True, strict=True)
+    health_startup_timeout_seconds: int = Field(default=60, ge=15, le=3600, strict=True)
+    health_stall_timeout_seconds: int = Field(default=60, ge=15, le=3600, strict=True)
+    health_max_restarts: int = Field(default=3, ge=0, le=20, strict=True)
 
     @model_validator(mode="after")
     def validate_disk_thresholds(self):

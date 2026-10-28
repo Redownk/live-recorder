@@ -10,10 +10,11 @@ from app.modules.recording import api as crawler_api
 from app.modules.live_rooms import api as rooms, live_api as live
 from app.modules.settings import api as settings
 from app.modules.video_processing import api as processing
+from app.modules.observability import api as observability
 from app.core.config import local_config
 from app.core.database import init_db, resolve_database_url
 from app.core.paths import RESOURCE_DIR
-from app.core.logger import get_logger, setup_logging
+from app.core.logger import get_logger, setup_logging, start_runtime_logging, stop_runtime_logging
 from app.core.instance_lock import InstanceLock
 from app.modules.recording.crawler import crawler_manager
 from app.modules.settings.service import init_recording_settings
@@ -47,16 +48,18 @@ app.include_router(live.router)
 app.include_router(crawler_api.router)
 app.include_router(settings.router)
 app.include_router(processing.router)
+app.include_router(observability.router)
 
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("服务启动中...")
     db_url = resolve_database_url(local_config.get("database", {}).get("url", "sqlite+aiosqlite:///./data/live_recorder.db"))
     instance_lock = InstanceLock(db_url)
     instance_lock.acquire()
     app.state.instance_lock = instance_lock
     try:
+        app.state.runtime_logs = start_runtime_logging()
+        logger.info("服务启动中...")
         await init_db(app, db_url)
         await init_recording_settings(app)
         app.state.recording_status = RecordingStatusTracker()
@@ -68,11 +71,17 @@ async def startup_event():
         if local_config.get("crawler", {}).get("auto_start", False):
             await crawler_manager.start()
     except BaseException:
-        await get_disk_guard(app).shutdown()
-        engine = getattr(app.state, "engine", None)
-        if engine is not None:
-            await engine.dispose()
-        instance_lock.release()
+        logger.exception("服务启动失败")
+        try:
+            await get_disk_guard(app).shutdown()
+        finally:
+            try:
+                engine = getattr(app.state, "engine", None)
+                if engine is not None:
+                    await engine.dispose()
+            finally:
+                instance_lock.release()
+                await asyncio.to_thread(stop_runtime_logging)
         raise
 
     logger.info("服务启动完成")
@@ -83,16 +92,21 @@ async def shutdown_event():
     logger.info("服务关闭中...")
     tasks = get_recording_tasks(app)
     tasks.closing = True
-    await get_disk_guard(app).shutdown()
     try:
         try:
-            await crawler_manager.shutdown()
+            await get_disk_guard(app).shutdown()
         finally:
             try:
-                await tasks.shutdown()
+                await crawler_manager.shutdown()
             finally:
-                await app.state.video_processing.shutdown()
+                try:
+                    await tasks.shutdown()
+                finally:
+                    await app.state.video_processing.shutdown()
         await recover_interrupted_recordings(app)
+    except BaseException:
+        logger.exception("服务关闭时发生异常")
+        raise
     finally:
         try:
             engine = getattr(app.state, "engine", None)
@@ -100,10 +114,12 @@ async def shutdown_event():
                 await engine.dispose()
         finally:
             instance_lock = getattr(app.state, "instance_lock", None)
-            if instance_lock is not None:
-                instance_lock.release()
-
-    logger.info("服务关闭完成")
+            try:
+                if instance_lock is not None:
+                    instance_lock.release()
+            finally:
+                logger.info("服务关闭清理结束")
+                await asyncio.to_thread(stop_runtime_logging)
 
 
 @app.get("/", include_in_schema=False)

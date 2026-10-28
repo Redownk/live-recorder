@@ -1,10 +1,11 @@
 <script setup>
 import { inject, nextTick, onUnmounted, ref, watch } from 'vue';
-import { Check, History, Pencil, Play, Plus, Radio, RefreshCw, Search, Square, Trash2, X } from '@lucide/vue';
+import { Check, FileText, History, Pencil, Play, Plus, Radio, RefreshCw, Search, Square, Trash2, X } from '@lucide/vue';
 import { api } from '../api.js';
-import { formatDuration, formatTime, platformName, safeUrl } from '../format.js';
+import { formatBytes, formatDuration, formatTime, platformName, safeUrl } from '../format.js';
 import ModalDialog from '../components/ModalDialog.vue';
 import DiskStatus from '../components/DiskStatus.vue';
+import RuntimeLogPanel from '../components/RuntimeLogPanel.vue';
 
 const notify = inject('notify');
 const rooms = ref([]);
@@ -18,6 +19,10 @@ const formError = ref('');
 const rowBusy = ref([]);
 const startBusy = ref([]);
 const disableMonitor = ref(true);
+const logRoom = ref(null);
+let logButton;
+function openLogs(room, event) { logRoom.value = room; logButton = event.currentTarget; }
+async function closeLogs() { logRoom.value = null; await nextTick(); if (!disposed) logButton?.focus(); }
 const statuses = ref({});
 const statusLoaded = ref(false);
 const statusError = ref('');
@@ -40,6 +45,9 @@ async function loadRecordingStatus() {
     const data = await api.recordingStatuses();
     if (!disposed) {
       statuses.value = data;
+      for (const room of rooms.value) {
+        if (data[room.id]?.monitor_enabled === false) room.monitor_enabled = false;
+      }
       statusReceivedAt = performance.now();
       statusTick.value = statusReceivedAt;
       statusLoaded.value = true;
@@ -51,7 +59,13 @@ async function loadRecordingStatus() {
 function recordingLabel(room) {
   if (statusError.value) return '状态不可用';
   if (!statusLoaded.value) return '获取中…';
-  return { recording: '录制中', reconnecting: '重连中', checking: '检查中', preparing: '准备中', finishing: '结束中', merging: '合并中', stopping: '停止中', disk_blocked: '空间不足' }[statuses.value[room.id]?.state] || '未录制';
+  return { recording: '录制中', reconnecting: '重连中', checking: '检查中', preparing: '准备中', finishing: '结束中', merging: '合并中', stopping: '停止中', disk_blocked: '空间不足', health_failed: '健康异常' }[statuses.value[room.id]?.state] || '未录制';
+}
+function healthLabel(room) {
+  if (statusError.value) return '-';
+  const status = statuses.value[room.id];
+  if (status?.state === 'health_failed') return '已暂停监控';
+  return { healthy: '正常', starting: '启动中', waiting: '等待数据', recovering: '自动恢复中', disabled: '已关闭' }[status?.health?.state] || '-';
 }
 function recordingDuration(room) {
   const status = statuses.value[room.id];
@@ -206,7 +220,7 @@ loadRecordingStatus();
     <DiskStatus compact />
     <div class="table-wrap" :aria-busy="loading">
       <table>
-        <thead><tr><th>平台</th><th>主播 / 房间号</th><th>备注</th><th>标题</th><th>监控</th><th>录制状态</th><th>录制时长</th><th>最近开播</th><th class="actions-head">操作</th></tr></thead>
+        <thead><tr><th>平台</th><th>主播 / 房间号</th><th>备注</th><th>标题</th><th>监控</th><th>录制状态</th><th>录制健康</th><th>录制时长</th><th>最近开播</th><th class="actions-head">操作</th></tr></thead>
         <tbody>
           <tr v-for="room in rooms" :key="room.id">
             <td><span class="platform-badge" :class="room.platform.toLowerCase()">{{ platformName(room.platform) }}</span></td>
@@ -225,6 +239,10 @@ loadRecordingStatus();
             <td class="title-cell">{{ room.title || '-' }}</td>
             <td><input type="checkbox" role="switch" :aria-label="`监控 ${room.owner || room.room_id}`" :checked="room.monitor_enabled" :disabled="rowBusy.includes(room.id)" @change="roomAction(room, 'monitor', $event)" /></td>
             <td class="recording-state-cell"><span class="recording-state" :title="statuses[room.id]?.message" :class="{ recording: !statusError && statuses[room.id]?.state === 'recording', reconnecting: !statusError && statuses[room.id]?.state === 'reconnecting', 'error-text': statuses[room.id]?.state === 'disk_blocked' }">{{ recordingLabel(room) }}</span></td>
+            <td class="recording-health-cell" :title="statuses[room.id]?.health?.last_error || statuses[room.id]?.message">
+              <span :class="{ 'error-text': statuses[room.id]?.state === 'health_failed' }">{{ healthLabel(room) }}</span>
+              <small v-if="!statusError && statuses[room.id]?.health" class="secondary-text">{{ formatBytes(statuses[room.id].health.output_bytes) }} / 恢复 {{ statuses[room.id].health.restart_count || 0 }} 次</small>
+            </td>
             <td class="recording-duration">{{ recordingDuration(room) }}</td>
             <td class="time-cell">{{ formatTime(room.last_live_time) }}</td>
             <td><div class="row-actions">
@@ -232,15 +250,17 @@ loadRecordingStatus();
               <button class="icon-button danger" title="停止录制" :aria-label="`停止录制 ${room.owner || room.room_id}`" :disabled="saving || rowBusy.includes(room.id)" @click="openModal('stop', room)"><Square :size="17" /></button>
               <button class="icon-button" title="检查直播状态" :aria-label="`检查 ${room.owner || room.room_id}`" :disabled="rowBusy.includes(room.id)" @click="roomAction(room, 'check')"><Radio :size="17" /></button>
               <RouterLink class="icon-button" :to="{ path: '/logs', query: { room_id: room.id } }" title="录制日志" :aria-label="`日志 ${room.owner || room.room_id}`"><History :size="17" /></RouterLink>
+              <button class="icon-button" title="运行日志" :aria-label="`运行日志 ${room.owner || room.room_id}`" @click="openLogs(room, $event)"><FileText :size="17" /></button>
               <button class="icon-button" title="编辑直播间" :aria-label="`编辑 ${room.owner || room.room_id}`" :disabled="remarkSaving" @click="openModal('edit', room)"><Pencil :size="17" /></button>
               <button class="icon-button danger" title="删除直播间" :aria-label="`删除 ${room.owner || room.room_id}`" :disabled="remarkSaving" @click="openModal('delete', room)"><Trash2 :size="17" /></button>
             </div></td>
           </tr>
-          <tr v-if="!rooms.length"><td colspan="9" class="empty-state">{{ loading ? '加载中…' : error ? '直播间加载失败' : keyword ? '没有匹配的直播间' : '暂无直播间' }}</td></tr>
+          <tr v-if="!rooms.length"><td colspan="10" class="empty-state">{{ loading ? '加载中…' : error ? '直播间加载失败' : keyword ? '没有匹配的直播间' : '暂无直播间' }}</td></tr>
         </tbody>
       </table>
     </div>
     <p class="list-count">{{ rooms.length }} 个直播间</p>
+    <ModalDialog v-if="logRoom" class="runtime-dialog" :title="'运行日志 · ' + (logRoom.remark || logRoom.owner || logRoom.room_id)" @close="closeLogs"><div class="runtime-dialog-body"><RuntimeLogPanel :key="logRoom.id" :room-id="logRoom.id" compact /><footer class="modal-actions"><RouterLink :to="{ path: '/runtime-logs', query: { room_id: logRoom.id } }" class="diagnostic-link"><FileText :size="16" />查看全部</RouterLink></footer></div></ModalDialog>
     <ModalDialog v-if="modal" :title="modal === 'add' ? '添加直播间' : modal === 'edit' ? '编辑直播间' : modal === 'stop' ? '停止录制' : '删除直播间'" :busy="saving" @close="modal = null">
       <form v-if="modal === 'add' || modal === 'edit'" class="modal-body" @submit.prevent="saveRoom">
         <label v-if="modal === 'add'" class="field">直播间 URL<input v-model="draft.room_url" type="url" required autofocus placeholder="https://live.douyin.com/…" :disabled="saving" /></label>

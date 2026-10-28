@@ -2,7 +2,8 @@ import { expect, test } from '@playwright/test';
 
 async function settingsApi(page, { failLoad = false, failSave = false, failBrowseOnce = false } = {}) {
   let settings = { save_path: './record', filename_template: '{platform}_{owner}_{timestamp}', check_interval_seconds: 5,
-    disk_protection_enabled: true, disk_min_free_gb: 5, disk_stop_free_gb: 1 };
+    disk_protection_enabled: true, disk_min_free_gb: 5, disk_stop_free_gb: 1,
+    health_check_enabled: true, health_startup_timeout_seconds: 60, health_stall_timeout_seconds: 60, health_max_restarts: 3 };
   const writes = [];
   function response(options) {
     const values = { platform: 'DOUYIN', owner: '示例主播', remark: '示例备注', room_id: '123456', title: '直播标题', timestamp: '20260101120000', date: '20260101', time: '120000', record_id: 'a1b2c3d4'.repeat(4) };
@@ -67,7 +68,8 @@ test('settings can be edited, saved and reloaded', async ({ page }, testInfo) =>
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await expect(page.getByText('录制设置已保存', { exact: true })).toBeVisible();
   expect(writes).toEqual([{ save_path: './record/custom', filename_template: '{owner}_{room_id}_{timestamp}', check_interval_seconds: 15,
-    disk_protection_enabled: true, disk_min_free_gb: 5, disk_stop_free_gb: 1 }]);
+    disk_protection_enabled: true, disk_min_free_gb: 5, disk_stop_free_gb: 1,
+    health_check_enabled: true, health_startup_timeout_seconds: 60, health_stall_timeout_seconds: 60, health_max_restarts: 3 }]);
   await page.reload();
   await expect(page.getByLabel('检查周期', { exact: true })).toHaveValue('15');
   await expect(page.getByLabel('文件名模板', { exact: true })).toHaveValue('{owner}_{room_id}_{timestamp}');

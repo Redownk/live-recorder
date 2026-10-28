@@ -61,11 +61,17 @@ class RecordingTaskManager:
 
                 if isinstance(exc, DiskSpaceError):
                     self.notices[key] = {"state": "disk_blocked", "message": str(exc)}
-                    logger.warning("磁盘保护阻止录制 platform=%s room_id=%s: %s", *key, exc)
+                    logger.warning("磁盘保护阻止录制 platform=%s room_id=%s: %s", *key, exc, extra={"event_code": "disk_space"})
                 else:
                     logger.exception("录制任务异常 platform=%s room_id=%s", *key)
-            except Exception:
-                logger.exception("录制任务异常 platform=%s room_id=%s", *key)
+            except Exception as exc:
+                from app.modules.recording.health import RecordingHealthError
+
+                if isinstance(exc, RecordingHealthError):
+                    self.notices[key] = {"state": "health_failed", "message": str(exc), "monitor_enabled": False}
+                    logger.warning("健康检测停止录制 platform=%s room_id=%s: %s", *key, exc, extra={"event_code": "recording_health"})
+                else:
+                    logger.exception("录制任务异常 platform=%s room_id=%s", *key)
             finally:
                 try:
                     await finish()

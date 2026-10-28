@@ -13,9 +13,12 @@ from app.services.platforms.recorder_factory import create_recorder
 from app.modules.recording.status import get_recording_status
 from app.modules.recording.tasks import get_recording_tasks
 from app.modules.recording.disk import DiskSpaceError
+from app.core.log_context import log_context, room_log_fields
+from app.core.logger import get_logger
 
 
 router = APIRouter(prefix="/api", tags=["录制管理"])
+logger = get_logger(__name__)
 
 
 def normalize_platform(platform: str) -> str:
@@ -84,6 +87,7 @@ async def create_room(payload: LiveRoomCreate, db: AsyncSession = Depends(get_db
     db.add(room)
     await db.commit()
     await db.refresh(room)
+    logger.info("直播间已添加，监控%s", "已启用" if room.monitor_enabled else "已暂停", extra=room_log_fields({"id": room.id, "platform": room.platform, "room_id": room.room_id}))
     return room
 
 
@@ -125,6 +129,8 @@ async def update_room(room_id: int, payload: LiveRoomUpdate, request: Request, d
             await manager.stop_room(key)
         if room.monitor_enabled:
             manager.disabled_keys.discard((room.platform, str(room.room_id)))
+            if data.get("monitor_enabled") is True:
+                manager.notices.pop((room.platform, str(room.room_id)), None)
     await db.refresh(room)
     return room
 
@@ -140,11 +146,14 @@ async def update_monitor(room_id: int, payload: MonitorUpdate, request: Request,
         await db.commit()
         if payload.monitor_enabled:
             manager.disabled_keys.discard(key)
+            manager.notices.pop(key, None)
             request.app.state.recording_settings.changed.set()
         else:
             manager.disabled_keys.add(key)
             await manager.stop_room(key)
     await db.refresh(room)
+    logger.info("房间监控%s", "已启用" if room.monitor_enabled else "已暂停",
+                extra={"room_id": room.id, "platform": room.platform, "platform_room_id": str(room.room_id)})
     return room
 
 
@@ -183,6 +192,8 @@ async def stop_room_recording(room_id: int, payload: RecordingStop, request: Req
             await db.commit()
             manager.disabled_keys.add(key)
         await manager.stop_room(key)
+        logger.info("手动停止本次录制，%s", "暂停监控" if payload.disable_monitor else "保留监控",
+                    extra={"room_id": room.id, "platform": room.platform, "platform_room_id": str(room.room_id)})
     return {"status": "stopped", "monitor_enabled": room.monitor_enabled}
 
 
@@ -197,7 +208,14 @@ async def check_room_live_status(room_id: int, db: AsyncSession = Depends(get_db
     })
     if recorder is None:
         raise HTTPException(status_code=400, detail="不支持的平台")
-    return await recorder.check_live_status()
+    with log_context(room_id=room.id, platform=room.platform, platform_room_id=str(room.room_id)):
+        try:
+            result = await recorder.check_live_status()
+            logger.info("手动检查直播状态：%s", "开播" if result.get("is_live") else "未开播")
+            return result
+        except Exception:
+            logger.exception("手动检查直播状态失败", extra={"event_code": "live_check"})
+            raise
 
 
 @router.delete("/rooms/{room_id}", status_code=status.HTTP_204_NO_CONTENT)

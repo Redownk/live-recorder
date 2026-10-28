@@ -5,8 +5,11 @@ from datetime import datetime
 from sqlalchemy import text
 
 from app.core.logger import get_logger
+from app.core.log_context import recording_log_context
 from app.services.platforms.live_checkers.douyin_live_checker import DouyinLiveChecker
 from app.services.platforms.recorder.base_recorder import BaseRecorder
+from app.modules.recording.health import RecordingHealthError
+from app.modules.recording.disk import DiskSpaceError
 from app.services.platforms.recorder import get_ffmpeg_path
 from app.core.session import get_db_session
 
@@ -15,6 +18,13 @@ logger = get_logger(__name__)
 
 
 class DouyinRecorder(BaseRecorder):
+
+    async def refresh_stream_url(self, live_info, previous_url):
+        for quality in ("real_origin", "origin", "uhd", "hd", "sd", "ld", "ao"):
+            stream = live_info.get("streams", {}).get(quality, {})
+            if stream.get("hls") or stream.get("flv"):
+                return stream.get("hls") or stream["flv"]
+        raise ValueError("重新获取抖音直播流失败")
 
     QUALITY_LIST = {
         "real_origin": "真原画",
@@ -149,6 +159,7 @@ class DouyinRecorder(BaseRecorder):
         await self.record_loop(log_id, output_prefix, stream_url)
 
     #异步录制任务
+    @recording_log_context
     async def record_loop(self, log_id, file_name, stream_url):
         headers = (
             "Referer: https://live.douyin.com/\r\n"
@@ -166,6 +177,7 @@ class DouyinRecorder(BaseRecorder):
         data_task = asyncio.create_task(self._collect_live_data_loop(log_id))
         try:
             while reconnect_count < max_reconnect:
+                is_m3u8 = ".m3u8" in stream_url.lower()
                 if is_m3u8:
                     output_file = f"{file_name}_{segment_index}.ts"
                     cmd = [
@@ -189,28 +201,24 @@ class DouyinRecorder(BaseRecorder):
                         output_file
                     ]
                 try:
-                    process = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL
-                    )
+                    process = await self.spawn_recording_process(cmd)
                     logger.info(self._log_message("ffmpeg 启动"))
                     self.recording_started(log_id)
                     try:
-                        return_code = await process.wait()
+                        return_code = await self.wait_recording_process(process, output_file, log_id)
                     finally:
                         self.recording_reconnecting(log_id)
                     logger.info(self._log_message("流断开，return_code: %s"), return_code)
-                    # ⭐ 判断文件是否真正生成且有内容
-                    import os
-                    if os.path.exists(output_file) and os.path.getsize(output_file) > 1024:
-                        segment_index += 1
+                    segment_advance = await self.complete_recording_segment(output_file, log_id)
+                    segment_index += segment_advance
+                    if self._segment_health_error is not None:
+                        stream_url = await self.recover_recording_stream(stream_url)
+                        if stream_url is None:
+                            break
+                        continue
+                    if segment_advance:
                         reconnect_count = 0
                         logger.info(self._log_message("有效分段: %s"), output_file)
-                    else:
-                        # 删除无效文件
-                        if os.path.exists(output_file):
-                            os.remove(output_file)
                     # 下播三次确认
                     offline_confirm = 0
                     for _ in range(3):
@@ -227,6 +235,8 @@ class DouyinRecorder(BaseRecorder):
 
                     logger.warning(self._log_message("断流，%s秒后重连 (%s/%s)"), wait_time, reconnect_count, max_reconnect)
                     await asyncio.sleep(wait_time)
+                except (RecordingHealthError, DiskSpaceError):
+                    raise
                 except Exception as e:
                     logger.exception(self._log_message("录制异常: %s"), e)
                     reconnect_count += 1
@@ -254,13 +264,13 @@ class DouyinRecorder(BaseRecorder):
                     "live_time": live_seconds,
                     "user_num": max_online_count,
                     "total_user": last_total_user_count,
-                    "interrupted": bool(asyncio.current_task().cancelling()),
+                    "interrupted": bool(asyncio.current_task().cancelling()) or self._health_failed,
                     "id": log_id
                 })
                 await db.commit()
 
             logger.info(self._log_message("%s 直播结束"), file_name)
-            if not asyncio.current_task().cancelling():
+            if not asyncio.current_task().cancelling() and not self._health_failed:
                 await self._post_process(file_name, segment_index,log_id)
             else:
                 logger.info(self._log_message("录制已中断，保留分片文件"))

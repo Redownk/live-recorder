@@ -1,7 +1,7 @@
 <script setup>
 import { computed, inject, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { ArrowDown, ArrowUp, Check, CircleStop, FileVideo, FolderOpen, Plus, RefreshCw, Trash2 } from '@lucide/vue';
+import { ArrowDown, ArrowUp, Check, CircleStop, FileText, FileVideo, FolderOpen, Plus, RefreshCw, Trash2 } from '@lucide/vue';
 import { api } from '../api.js';
 import DirectoryPicker from '../components/DirectoryPicker.vue';
 import ModalDialog from '../components/ModalDialog.vue';
@@ -136,7 +136,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); });
       <h2>处理任务</h2>
       <p v-if="!visibleJobs.length" class="muted">暂无任务</p>
       <article v-for="job in visibleJobs" :key="job.id" class="processing-job">
-        <div class="processing-job-heading"><strong>{{ job.current_file || name(job.files[0]) }}</strong><span class="processing-job-state" :class="job.status">{{ states[job.status] }}</span><button v-if="active(job)" class="icon-button" type="button" title="取消任务" aria-label="取消任务" :disabled="job.status === 'cancelling'" @click="cancel(job)"><CircleStop :size="17" /></button></div>
+        <div class="processing-job-heading"><strong>{{ job.current_file || name(job.files[0]) }}</strong><span class="processing-job-state" :class="job.status">{{ states[job.status] }}</span><RouterLink class="icon-button" :to="{ path: '/runtime-logs', query: { processing_job_id: job.id } }" title="运行日志" :aria-label="`运行日志 任务${job.id}`"><FileText :size="17" /></RouterLink><button v-if="active(job)" class="icon-button" type="button" title="取消任务" aria-label="取消任务" :disabled="job.status === 'cancelling'" @click="cancel(job)"><CircleStop :size="17" /></button></div>
         <div class="processing-progress"><progress max="100" :value="job.progress" aria-label="处理进度"></progress><span>{{ job.progress }}%</span></div>
         <p v-if="job.error" class="error-text">{{ job.error }}</p><p v-if="job.warning" class="muted">{{ job.warning }}</p>
         <p v-for="output in job.outputs" :key="output" class="secondary-text processing-result">{{ output }}</p>

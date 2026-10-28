@@ -1,6 +1,6 @@
 const baseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
-async function request(path, { body, ...options } = {}) {
+async function request(path, { body, binary = false, ...options } = {}) {
   let response;
   try {
     response = await fetch(`${baseUrl}${path}`, {
@@ -21,6 +21,7 @@ async function request(path, { body, ...options } = {}) {
     throw new Error(message);
   }
   if (response.status === 204) return null;
+  if (binary) return response.blob();
   return response.json();
 }
 
@@ -32,6 +33,12 @@ function query(values = {}) {
 }
 
 export const api = {
+  runtimeLogs: (params, signal) => request(`/api/system/logs${query(params)}`, { signal }),
+  runtimeIssues: (params) => request(`/api/system/issues${query(params)}`),
+  diagnose: (body) => request('/api/system/diagnostics', { method: 'POST', body }),
+  diagnosePlatform: (id) => request(`/api/system/diagnostics/platform/${id}`, { method: 'POST' }),
+  diagnoseEncoder: (encoder) => request('/api/system/diagnostics/encoder', { method: 'POST', body: { encoder } }),
+  exportDiagnostics: (body) => request('/api/system/diagnostics/export', { method: 'POST', body, binary: true }),
   settings: () => request('/api/settings'),
   diskStatus: () => request('/api/settings/disk'),
   directories: (params) => request(`/api/settings/directories${query(params)}`),

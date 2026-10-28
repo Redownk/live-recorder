@@ -82,7 +82,8 @@ class RecordingDiskGuard:
             if disk["state"] in {"critical", "unavailable"} and manager.output_paths.get(key) == prefix:
                 async with manager.control_lock(key):
                     if manager.output_paths.get(key) == prefix:
-                        logger.warning("磁盘保护停止录制 platform=%s room_id=%s path=%s", *key, prefix.parent)
+                        logger.warning("磁盘保护停止录制 platform=%s room_id=%s path=%s", *key, prefix.parent,
+                                       extra={"room_id": manager.room_ids.get(key), "platform": key[0], "platform_room_id": key[1], "event_code": "disk_space"})
                         await manager.stop_room(key, reason="disk_blocked", message=disk["message"])
 
     async def run(self):

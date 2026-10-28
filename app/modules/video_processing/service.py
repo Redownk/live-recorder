@@ -7,6 +7,7 @@ import tempfile
 from uuid import uuid4
 
 from app.core.logger import get_logger
+from app.core.log_context import processing_log_context
 from app.shared.filesystem.browser import VIDEO_EXTENSIONS
 from app.services.platforms.recorder import get_ffmpeg_path
 from app.services.platforms.recorder.base_recorder import BaseRecorder
@@ -134,7 +135,7 @@ class VideoProcessingManager:
         self.claims.update(claims)
         task = asyncio.create_task(self.run(job, options, inputs, outputs))
         self.tasks[job["id"]] = task
-        logger.info("视频处理加入队列 id=%s mode=%s files=%s", job["id"], options.mode, len(inputs))
+        logger.info("视频处理加入队列 id=%s mode=%s files=%s", job["id"], options.mode, len(inputs), extra={"processing_job_id": job["id"]})
         def finished(completed):
             self.claims.difference_update(claims)
             self.tasks.pop(job["id"], None)
@@ -183,6 +184,7 @@ class VideoProcessingManager:
             await BaseRecorder.stop_process(self, process)
             await asyncio.gather(reader, return_exceptions=True)
 
+    @processing_log_context
     async def run(self, job, options, inputs, outputs):
         try:
             async with self.semaphore:
@@ -270,4 +272,4 @@ class VideoProcessingManager:
         except Exception as exc:
             job["status"] = "failed"
             job["error"] = str(exc)
-            logger.warning("视频处理失败 id=%s error=%s", job["id"], exc)
+            logger.warning("视频处理失败 id=%s error=%s", job["id"], exc, extra={"event_code": "processing"})

@@ -18,7 +18,8 @@ const tokens = [
   ['date', '日期'], ['time', '时间'], ['timestamp', '日期时间'], ['record_id', '唯一编号'],
 ];
 const diskStatus = ref(null);
-const draft = reactive({ save_path: '', filename_template: '', check_interval_seconds: 5, disk_protection_enabled: true, disk_min_free_gb: 5, disk_stop_free_gb: 1 });
+const draft = reactive({ save_path: '', filename_template: '', check_interval_seconds: 5, disk_protection_enabled: true, disk_min_free_gb: 5, disk_stop_free_gb: 1,
+  health_check_enabled: true, health_startup_timeout_seconds: 60, health_stall_timeout_seconds: 60, health_max_restarts: 3 });
 const saved = ref(null);
 const loading = ref(true);
 const saving = ref(false);
@@ -36,7 +37,9 @@ let disposed = false;
 const dirty = computed(() => saved.value && Object.keys(draft).some((key) => draft[key] !== saved.value[key]));
 function applySettings(data) {
   saved.value = { save_path: data.save_path, filename_template: data.filename_template, check_interval_seconds: data.check_interval_seconds,
-    disk_protection_enabled: data.disk_protection_enabled ?? true, disk_min_free_gb: data.disk_min_free_gb ?? 5, disk_stop_free_gb: data.disk_stop_free_gb ?? 1 };
+    disk_protection_enabled: data.disk_protection_enabled ?? true, disk_min_free_gb: data.disk_min_free_gb ?? 5, disk_stop_free_gb: data.disk_stop_free_gb ?? 1,
+    health_check_enabled: data.health_check_enabled ?? true, health_startup_timeout_seconds: data.health_startup_timeout_seconds ?? 60,
+    health_stall_timeout_seconds: data.health_stall_timeout_seconds ?? 60, health_max_restarts: data.health_max_restarts ?? 3 };
   Object.assign(draft, saved.value);
   rule.value = presets.some((item) => item.value === data.filename_template) ? data.filename_template : 'custom';
   preview.value = data;
@@ -129,6 +132,15 @@ load();
           <div class="disk-thresholds">
             <label class="field">暂停新录制阈值<div class="input-unit"><input v-model.number="draft.disk_min_free_gb" type="number" aria-label="暂停新录制阈值" min="2" max="1048576" step="1" required :disabled="!draft.disk_protection_enabled" /><span>GiB</span></div></label>
             <label class="field">停止录制阈值<div class="input-unit"><input v-model.number="draft.disk_stop_free_gb" type="number" aria-label="停止录制阈值" min="1" :max="draft.disk_min_free_gb - 1" step="1" required :disabled="!draft.disk_protection_enabled" /><span>GiB</span></div></label>
+          </div>
+        </section>
+        <section class="settings-section">
+          <h2>录制健康检测</h2>
+          <label class="checkbox-label"><input v-model="draft.health_check_enabled" type="checkbox" />启用录制健康检测</label>
+          <div class="disk-thresholds">
+            <label class="field">启动宽限时间<div class="input-unit"><input v-model.number="draft.health_startup_timeout_seconds" type="number" aria-label="启动宽限时间" min="15" max="3600" step="1" required :disabled="!draft.health_check_enabled" /><span>秒</span></div></label>
+            <label class="field">卡住超时时间<div class="input-unit"><input v-model.number="draft.health_stall_timeout_seconds" type="number" aria-label="卡住超时时间" min="15" max="3600" step="1" required :disabled="!draft.health_check_enabled" /><span>秒</span></div></label>
+            <label class="field">单场自动恢复次数<input v-model.number="draft.health_max_restarts" type="number" aria-label="单场自动恢复次数" min="0" max="20" step="1" required :disabled="!draft.health_check_enabled" /></label>
           </div>
         </section>
       </fieldset>
