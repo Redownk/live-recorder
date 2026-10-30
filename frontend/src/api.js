@@ -33,6 +33,10 @@ function query(values = {}) {
 }
 
 export const api = {
+  roomSettings: (id) => request(`/api/rooms/${id}/recording-settings`),
+  saveRoomSettings: (id, body) => request(`/api/rooms/${id}/recording-settings`, { method: 'PUT', body }),
+  previewRoomSettings: (id, body) => request(`/api/rooms/${id}/recording-settings/preview`, { method: 'POST', body }),
+  resetRoomSettings: (id) => request(`/api/rooms/${id}/recording-settings`, { method: 'DELETE' }),
   runtimeLogs: (params, signal) => request(`/api/system/logs${query(params)}`, { signal }),
   runtimeIssues: (params) => request(`/api/system/issues${query(params)}`),
   diagnose: (body) => request('/api/system/diagnostics', { method: 'POST', body }),

@@ -11,6 +11,7 @@ from app.modules.live_rooms import api as rooms, live_api as live
 from app.modules.settings import api as settings
 from app.modules.video_processing import api as processing
 from app.modules.observability import api as observability
+from app.modules.room_settings import api as room_settings
 from app.core.config import local_config
 from app.core.database import init_db, resolve_database_url
 from app.core.paths import RESOURCE_DIR
@@ -49,6 +50,7 @@ app.include_router(crawler_api.router)
 app.include_router(settings.router)
 app.include_router(processing.router)
 app.include_router(observability.router)
+app.include_router(room_settings.router)
 
 
 @app.on_event("startup")

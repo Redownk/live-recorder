@@ -15,6 +15,8 @@ class RecordingSettings(Base):
     save_path: Mapped[str] = mapped_column(String(1024))
     filename_template: Mapped[str] = mapped_column(String(255))
     check_interval_seconds: Mapped[int] = mapped_column(Integer)
+    quality: Mapped[str] = mapped_column(String(16), default="best", server_default=text("'best'"))
+    segment_minutes: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     disk_protection_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
     disk_min_free_gb: Mapped[int] = mapped_column(Integer, default=5, server_default=text("5"))
     disk_stop_free_gb: Mapped[int] = mapped_column(Integer, default=1, server_default=text("1"))
@@ -22,6 +24,17 @@ class RecordingSettings(Base):
     health_startup_timeout_seconds: Mapped[int] = mapped_column(Integer, default=60, server_default=text("60"))
     health_stall_timeout_seconds: Mapped[int] = mapped_column(Integer, default=60, server_default=text("60"))
     health_max_restarts: Mapped[int] = mapped_column(Integer, default=3, server_default=text("3"))
+
+
+class RoomRecordingSettings(Base):
+    __tablename__ = "room_recording_settings"
+
+    room_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    save_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    filename_template: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    check_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quality: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    segment_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class LiveRoom(Base):

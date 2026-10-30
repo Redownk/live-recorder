@@ -39,6 +39,7 @@ class LiveRoomOut(LiveRoomBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    recording_settings_customized: bool = False
     last_live_time: datetime | None = None
     create_time: datetime
     update_time: datetime

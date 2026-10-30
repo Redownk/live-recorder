@@ -10,6 +10,7 @@ from app.services.platforms.live_checkers.douyin_live_checker import DouyinLiveC
 from app.services.platforms.recorder.base_recorder import BaseRecorder
 from app.modules.recording.health import RecordingHealthError
 from app.modules.recording.disk import DiskSpaceError
+from app.modules.recording.quality import douyin_stream
 from app.services.platforms.recorder import get_ffmpeg_path
 from app.core.session import get_db_session
 
@@ -20,11 +21,7 @@ logger = get_logger(__name__)
 class DouyinRecorder(BaseRecorder):
 
     async def refresh_stream_url(self, live_info, previous_url):
-        for quality in ("real_origin", "origin", "uhd", "hd", "sd", "ld", "ao"):
-            stream = live_info.get("streams", {}).get(quality, {})
-            if stream.get("hls") or stream.get("flv"):
-                return stream.get("hls") or stream["flv"]
-        raise ValueError("重新获取抖音直播流失败")
+        return douyin_stream(live_info, self.recording_options().quality)
 
     QUALITY_LIST = {
         "real_origin": "真原画",
@@ -127,8 +124,7 @@ class DouyinRecorder(BaseRecorder):
             logger.warning(self._log_message("没有可用清晰度"))
             return
 
-        stream = live_info["streams"][selected_q]
-        stream_url = stream["hls"] or stream["flv"]
+        stream_url = douyin_stream(live_info, self.recording_options().quality)
 
         # 写入数据库日志
         async with get_db_session(self.app) as db:
@@ -216,7 +212,7 @@ class DouyinRecorder(BaseRecorder):
                         if stream_url is None:
                             break
                         continue
-                    if segment_advance:
+                    if segment_advance and self._segment_had_data:
                         reconnect_count = 0
                         logger.info(self._log_message("有效分段: %s"), output_file)
                     # 下播三次确认
@@ -272,6 +268,8 @@ class DouyinRecorder(BaseRecorder):
             logger.info(self._log_message("%s 直播结束"), file_name)
             if not asyncio.current_task().cancelling() and not self._health_failed:
                 await self._post_process(file_name, segment_index,log_id)
+            elif self.recording_options().segment_minutes and not self._health_failed:
+                await self.register_timed_segments(file_name, segment_index, log_id, probe_durations=False)
             else:
                 logger.info(self._log_message("录制已中断，保留分片文件"))
 

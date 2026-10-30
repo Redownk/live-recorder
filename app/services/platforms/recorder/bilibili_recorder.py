@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 class BilibiliRecorder(BaseRecorder):
 
     async def refresh_stream_url(self, live_info, previous_url):
-        return await BiliLiveChecker.get_stream_url(self.room_id, 25000, 'hls_fmp4')
+        return await BiliLiveChecker.get_stream_url(self.room_id, 25000, 'hls_fmp4', quality=self.recording_options().quality)
 
     async def check_live_status(self):
         info =await BiliLiveChecker.get_room_info(self.room_id)
@@ -39,7 +39,7 @@ class BilibiliRecorder(BaseRecorder):
     async def record(self,live_info):
         start_time= datetime.now()
         output_prefix = await self.create_output_prefix(live_info, start_time)
-        stream_url=await BiliLiveChecker.get_stream_url(self.room_id,25000,'hls_fmp4')
+        stream_url = await self.refresh_stream_url(live_info, None)
         async with get_db_session(self.app) as db:
             result = await db.execute(text("""
                 INSERT INTO live_room_log
@@ -133,7 +133,7 @@ class BilibiliRecorder(BaseRecorder):
                         if stream_url is None:
                             break
                         continue
-                    if segment_advance:
+                    if segment_advance and self._segment_had_data:
                         reconnect_count = 0
                         logger.info(self._log_message("有效分段: %s"), output_file)
 
@@ -155,7 +155,7 @@ class BilibiliRecorder(BaseRecorder):
 
                     logger.warning(self._log_message("断流，%s秒后重连 (%s/%s)"), wait_time, reconnect_count, max_reconnect)
                     await asyncio.sleep(wait_time)
-                    stream_url=await BiliLiveChecker.get_stream_url(self.room_id,25000,'hls_fmp4')
+                    stream_url = await self.refresh_stream_url(live_info, stream_url)
 
                 except (RecordingHealthError, DiskSpaceError):
                     raise
@@ -196,6 +196,8 @@ class BilibiliRecorder(BaseRecorder):
             logger.info(self._log_message("%s 直播结束"), file_name)
             if not asyncio.current_task().cancelling() and not self._health_failed:
                 await self._post_process(file_name, segment_index,log_id)
+            elif self.recording_options().segment_minutes and not self._health_failed:
+                await self.register_timed_segments(file_name, segment_index, log_id, probe_durations=False)
             else:
                 logger.info(self._log_message("录制已中断，保留分片文件"))
 

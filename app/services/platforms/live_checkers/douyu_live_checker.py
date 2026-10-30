@@ -239,8 +239,21 @@ class DouyuLiveChecker:
         rate: int = 0,
         cdn: Optional[str] = None,
         protocol: str = "flv",
+        quality: str = "best",
     ) -> str:
         play_info = await DouyuLiveChecker.get_play_info(room_id=room_id, rate=rate, cdn=cdn)
+
+        if quality != "best":
+            from app.modules.recording.quality import quality_index
+            from app.core.logger import get_logger
+
+            rates = [item for item in play_info.get("multirates", []) if isinstance(item.get("rate"), int)]
+            rates.sort(key=lambda item: (item["rate"] == 0, int(item.get("bit") or 0)), reverse=True)
+            if rates:
+                selected = rates[quality_index(len(rates), quality)]["rate"]
+                play_info = await DouyuLiveChecker.get_play_info(room_id=room_id, rate=selected, cdn=cdn)
+            else:
+                get_logger(__name__).warning("平台未提供清晰度列表，使用当前可用直播流")
 
         stream_url = f"{play_info['rtmp_url']}/{play_info['rtmp_live']}"
         if protocol == "m3u8":

@@ -6,7 +6,7 @@ from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.session import get_db
-from app.models import LiveRoom, LiveRoomLog, LiveRoomLogVideo, LiveRoomStats
+from app.models import LiveRoom, LiveRoomLog, LiveRoomLogVideo, LiveRoomStats, RoomRecordingSettings
 from app.modules.live_rooms.schemas import LiveRoomCreate, LiveRoomOut, LiveRoomUpdate, MonitorUpdate, RecordingStop
 from app.modules.live_rooms.checker import LiveChecker
 from app.services.platforms.recorder_factory import create_recorder
@@ -43,7 +43,11 @@ async def list_rooms(keyword: str | None = Query(default=None), db: AsyncSession
             )
         )
     result = await db.execute(stmt)
-    return result.scalars().all()
+    rooms = result.scalars().all()
+    customized = set((await db.execute(select(RoomRecordingSettings.room_id))).scalars().all())
+    for room in rooms:
+        room.recording_settings_customized = room.id in customized
+    return rooms
 
 
 @router.get("/recording-status")
@@ -56,7 +60,7 @@ async def recording_status(request: Request):
 
 
 @router.post("/rooms", response_model=LiveRoomOut, status_code=status.HTTP_201_CREATED)
-async def create_room(payload: LiveRoomCreate, db: AsyncSession = Depends(get_db)):
+async def create_room(payload: LiveRoomCreate, request: Request, db: AsyncSession = Depends(get_db)):
     try:
         info = await LiveChecker.check(payload.room_url)
     except ValueError as exc:
@@ -87,6 +91,7 @@ async def create_room(payload: LiveRoomCreate, db: AsyncSession = Depends(get_db
     db.add(room)
     await db.commit()
     await db.refresh(room)
+    request.app.state.recording_settings.touch_room(room.id)
     logger.info("直播间已添加，监控%s", "已启用" if room.monitor_enabled else "已暂停", extra=room_log_fields({"id": room.id, "platform": room.platform, "room_id": room.room_id}))
     return room
 
@@ -96,6 +101,7 @@ async def get_room(room_id: int, db: AsyncSession = Depends(get_db)):
     room = await db.get(LiveRoom, room_id)
     if room is None or room.del_flag != 0:
         raise HTTPException(status_code=404, detail="直播间不存在")
+    room.recording_settings_customized = await db.get(RoomRecordingSettings, room.id) is not None
     return room
 
 
@@ -131,6 +137,7 @@ async def update_room(room_id: int, payload: LiveRoomUpdate, request: Request, d
             manager.disabled_keys.discard((room.platform, str(room.room_id)))
             if data.get("monitor_enabled") is True:
                 manager.notices.pop((room.platform, str(room.room_id)), None)
+                request.app.state.recording_settings.touch_room(room.id)
     await db.refresh(room)
     return room
 
@@ -147,7 +154,7 @@ async def update_monitor(room_id: int, payload: MonitorUpdate, request: Request,
         if payload.monitor_enabled:
             manager.disabled_keys.discard(key)
             manager.notices.pop(key, None)
-            request.app.state.recording_settings.changed.set()
+            request.app.state.recording_settings.touch_room(room.id)
         else:
             manager.disabled_keys.add(key)
             await manager.stop_room(key)
@@ -229,6 +236,14 @@ async def delete_room(room_id: int, request: Request, db: AsyncSession = Depends
         await db.commit()
         manager.disabled_keys.add(key)
         await manager.stop_room(key)
+        settings = request.app.state.recording_settings
+        async with settings.write_lock:
+            overrides = await db.get(RoomRecordingSettings, room_id)
+            if overrides is not None:
+                await db.delete(overrides)
+                await db.commit()
+            settings.room_overrides.pop(room_id, None)
+            settings.touch_room(room_id)
 
 
 @router.get("/logs")

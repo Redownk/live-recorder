@@ -65,6 +65,7 @@ class RecordingDiskGuard:
     async def snapshot(self):
         options = self.app.state.recording_settings.settings
         paths = {resolve_save_path(options.save_path)}
+        paths.update(resolve_save_path(values["save_path"]) for values in self.app.state.recording_settings.room_overrides.values() if "save_path" in values)
         paths.update(path.parent for path in get_recording_tasks(self.app).output_paths.values())
         disks = [await self.inspect(path) for path in sorted(paths, key=str)]
         return {"enabled": options.disk_protection_enabled, "min_free_gb": options.disk_min_free_gb,

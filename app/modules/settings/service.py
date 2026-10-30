@@ -5,12 +5,14 @@ from datetime import datetime
 from pathlib import Path
 from string import Formatter
 from uuid import uuid4
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.config import ROOT_DIR
 from app.core.session import get_db_session
-from app.models import RecordingSettings
+from app.models import RecordingSettings, RoomRecordingSettings
+from sqlalchemy import select
 
 
 DEFAULT_FILENAME_TEMPLATE = "{platform}_{owner}_{timestamp}"
@@ -24,6 +26,8 @@ class RecordingOptions(BaseModel):
     save_path: str = Field(default="./record", min_length=1, max_length=1024)
     filename_template: str = Field(default=DEFAULT_FILENAME_TEMPLATE, min_length=1, max_length=255)
     check_interval_seconds: int = Field(default=5, ge=1, le=86400, strict=True)
+    quality: Literal["best", "high", "medium", "low"] = "best"
+    segment_minutes: int = Field(default=0, ge=0, le=1440, strict=True)
     disk_protection_enabled: bool = Field(default=True, strict=True)
     disk_min_free_gb: int = Field(default=5, ge=1, le=1048576, strict=True)
     disk_stop_free_gb: int = Field(default=1, ge=1, le=1048576, strict=True)
@@ -108,6 +112,17 @@ class RecordingSettingsManager:
         self.changed = asyncio.Event()
         self.write_lock = asyncio.Lock()
         self.claimed_output_prefixes: set[Path] = set()
+        self.room_overrides: dict[int, dict] = {}
+        self.schedule_revision = 0
+        self.room_revisions: dict[int, int] = {}
+
+    def touch_room(self, room_id):
+        self.room_revisions[room_id] = self.room_revisions.get(room_id, 0) + 1
+        self.changed.set()
+
+    def for_room(self, room):
+        values = self.room_overrides.get(room.get("id"), {})
+        return RecordingOptions.model_validate({**self.settings.model_dump(), **values})
 
     async def save(self, app, settings: RecordingOptions):
         async with self.write_lock:
@@ -123,6 +138,7 @@ class RecordingSettingsManager:
                         setattr(record, key, value)
                 await db.commit()
             self.settings = settings
+            self.schedule_revision += 1
             self.changed.set()
 
 
@@ -130,12 +146,17 @@ async def init_recording_settings(app):
     async with get_db_session(app) as db:
         record = await db.get(RecordingSettings, 1)
         settings = RecordingOptions.model_validate(record) if record is not None else RecordingOptions()
+        overrides = (await db.execute(select(RoomRecordingSettings))).scalars().all()
     app.state.recording_settings = RecordingSettingsManager(settings)
+    app.state.recording_settings.room_overrides = {
+        item.room_id: {name: getattr(item, name) for name in ("save_path", "filename_template", "check_interval_seconds", "quality", "segment_minutes") if getattr(item, name) is not None}
+        for item in overrides
+    }
 
 
-async def create_output_prefix(app, room, live_info, start_time: datetime) -> str:
+async def create_output_prefix(app, room, live_info, start_time: datetime, settings=None) -> str:
     manager = app.state.recording_settings
-    settings = manager.settings
+    settings = settings or manager.for_room(room)
     directory = resolve_save_path(settings.save_path)
     name = build_filename(settings.filename_template, room, live_info, start_time, uuid4().hex)
     output = (directory / name).resolve()

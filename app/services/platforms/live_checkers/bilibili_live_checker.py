@@ -6,6 +6,7 @@ from app.core.config import local_config
 from app.services.platforms.common.util import client
 from app.services.platforms.live_checkers import random_user_agent,match1,json_loads,wbi
 import json
+from app.modules.recording.quality import quality_index
 
 class BiliLiveChecker:
     fake_headers = {
@@ -128,7 +129,7 @@ class BiliLiveChecker:
         return resp.json().get('data')
 
     @staticmethod
-    async def get_stream_url(room_id: int, qn: int, protocol: str) -> str:
+    async def get_stream_url(room_id: int, qn: int, protocol: str, quality: str = "best") -> str:
         """
         拆解逻辑：对应获取直播流方法
         从 API 数据中解析出最终可用的播放地址
@@ -137,6 +138,21 @@ class BiliLiveChecker:
         play_info = await BiliLiveChecker.get_play_api_data(room_id, qn)
         if not play_info or not play_info.get('playurl_info'):
             return None
+
+        if quality != "best":
+            advertised = set()
+            for stream in play_info['playurl_info']['playurl']['stream']:
+                for fmt in stream.get('format', []):
+                    for codec in fmt.get('codec', []):
+                        advertised.update(value for value in codec.get('accept_qn', []) if isinstance(value, int))
+            qualities = sorted(advertised, reverse=True)
+            if qualities:
+                selected = qualities[quality_index(len(qualities), quality)]
+                selected_info = await BiliLiveChecker.get_play_api_data(room_id, selected)
+                if selected_info and selected_info.get('playurl_info'):
+                    play_info = selected_info
+            else:
+                logging.getLogger(__name__).warning("平台未提供清晰度列表，使用当前可用直播流")
 
         streams = play_info['playurl_info']['playurl']['stream']
 

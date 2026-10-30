@@ -51,6 +51,8 @@ async def init_db(app, db_url: str):
             settings_columns = await conn.execute(text("PRAGMA table_info(recording_settings)"))
             settings_names = {column[1] for column in settings_columns.all()}
             for name, definition in (
+                ("quality", "VARCHAR(16) NOT NULL DEFAULT 'best'"),
+                ("segment_minutes", "INTEGER NOT NULL DEFAULT 0"),
                 ("disk_protection_enabled", "BOOLEAN NOT NULL DEFAULT 1"),
                 ("disk_min_free_gb", "INTEGER NOT NULL DEFAULT 5"),
                 ("disk_stop_free_gb", "INTEGER NOT NULL DEFAULT 1"),

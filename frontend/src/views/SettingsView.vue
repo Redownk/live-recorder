@@ -4,6 +4,7 @@ import { FolderOpen, RefreshCw, RotateCcw, Save } from '@lucide/vue';
 import { api } from '../api.js';
 import DirectoryPicker from '../components/DirectoryPicker.vue';
 import DiskStatus from '../components/DiskStatus.vue';
+import { recordingQualities } from '../recordingOptions.js';
 
 const notify = inject('notify');
 const presets = [
@@ -19,7 +20,7 @@ const tokens = [
 ];
 const diskStatus = ref(null);
 const draft = reactive({ save_path: '', filename_template: '', check_interval_seconds: 5, disk_protection_enabled: true, disk_min_free_gb: 5, disk_stop_free_gb: 1,
-  health_check_enabled: true, health_startup_timeout_seconds: 60, health_stall_timeout_seconds: 60, health_max_restarts: 3 });
+  health_check_enabled: true, health_startup_timeout_seconds: 60, health_stall_timeout_seconds: 60, health_max_restarts: 3, quality: 'best', segment_minutes: 0 });
 const saved = ref(null);
 const loading = ref(true);
 const saving = ref(false);
@@ -40,6 +41,8 @@ function applySettings(data) {
     disk_protection_enabled: data.disk_protection_enabled ?? true, disk_min_free_gb: data.disk_min_free_gb ?? 5, disk_stop_free_gb: data.disk_stop_free_gb ?? 1,
     health_check_enabled: data.health_check_enabled ?? true, health_startup_timeout_seconds: data.health_startup_timeout_seconds ?? 60,
     health_stall_timeout_seconds: data.health_stall_timeout_seconds ?? 60, health_max_restarts: data.health_max_restarts ?? 3 };
+  saved.value.quality = data.quality ?? 'best';
+  saved.value.segment_minutes = data.segment_minutes ?? 0;
   Object.assign(draft, saved.value);
   rule.value = presets.some((item) => item.value === data.filename_template) ? data.filename_template : 'custom';
   preview.value = data;
@@ -125,6 +128,7 @@ load();
           <h2>直播检查</h2>
           <label class="field interval-field">检查周期<div class="input-unit"><input v-model.number="draft.check_interval_seconds" type="number" aria-label="检查周期" required min="1" max="86400" step="1" /><span aria-hidden="true">秒</span></div></label>
         </section>
+        <section class="settings-section"><h2>默认录制参数</h2><label class="field">清晰度<select v-model="draft.quality" aria-label="默认录制清晰度"><option v-for="item in recordingQualities" :key="item.value" :value="item.value">{{ item.label }}</option></select></label><label class="checkbox-label"><input type="checkbox" :checked="draft.segment_minutes > 0" @change="draft.segment_minutes = $event.target.checked ? 30 : 0" />定时独立分片</label><label v-if="draft.segment_minutes > 0" class="field interval-field">分片时长<div class="input-unit"><input v-model.number="draft.segment_minutes" type="number" aria-label="默认分片时长" min="1" max="1440" step="1" required /><span>分钟</span></div></label></section>
         <section class="settings-section">
           <h2>磁盘空间保护</h2>
           <DiskStatus ref="diskStatus" />

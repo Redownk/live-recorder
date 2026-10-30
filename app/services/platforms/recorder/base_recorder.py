@@ -1,4 +1,7 @@
 import time
+import json
+import math
+import os
 from datetime import datetime
 import asyncio
 from pathlib import Path
@@ -29,6 +32,15 @@ class BaseRecorder:
         self._health_last_error = None
         self._health_failed = False
         self._segment_health_error = None
+        self._recording_options = None
+        self._timed_output = None
+        self._segment_had_data = False
+
+    def recording_options(self):
+        if self._recording_options is None:
+            manager = getattr(self.app.state, "recording_settings", None)
+            self._recording_options = manager.for_room(self.room) if manager is not None else self.health_options()
+        return self._recording_options
 
     def health_options(self):
         from app.modules.settings.service import RecordingOptions
@@ -37,6 +49,12 @@ class BaseRecorder:
         return manager.settings if manager is not None else RecordingOptions()
 
     async def spawn_recording_process(self, command):
+        from app.modules.recording.segments import TimedSegments
+
+        self._timed_output = None
+        if self.recording_options().segment_minutes:
+            self._timed_output = TimedSegments(command[-1])
+            command = self._timed_output.command(command, self.recording_options().segment_minutes * 60)
         command = [command[0], "-progress", "pipe:1", "-stats_period", "1", "-nostats", *command[1:]]
         return await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
 
@@ -45,6 +63,7 @@ class BaseRecorder:
         stream = getattr(process, "stdout", None)
         sample = RecordingHealthSample(progress_expected=stream is not None)
         errors = bytearray()
+        current_index = self._timed_output.first_index if self._timed_output else 0
 
         def publish():
             get_recording_status(self.app).health_updated(
@@ -73,7 +92,14 @@ class BaseRecorder:
                 done, _ = await asyncio.wait({waiting}, timeout=5)
                 if done:
                     return await waiting
-                sample.file_observation(await asyncio.to_thread(recording_file_size, output_file))
+                if self._timed_output is not None:
+                    size, index = await asyncio.to_thread(self._timed_output.observation)
+                    if index != current_index:
+                        current_index = index
+                        sample.media_time_us = 0
+                    sample.file_observation(size)
+                else:
+                    sample.file_observation(await asyncio.to_thread(recording_file_size, output_file))
                 if waiting.done():
                     return await waiting
                 options = self.health_options()
@@ -102,8 +128,15 @@ class BaseRecorder:
                                extra={"event_code": "ffmpeg_exit"})
 
     async def complete_recording_segment(self, output_file, log_id):
+        if self._timed_output is not None:
+            size, index = await asyncio.to_thread(self._timed_output.observation)
+            self._segment_had_data = size > 1024
+            if self._segment_health_error is not None:
+                await self.health_failure(log_id, self._segment_health_error)
+            return max(1, index - self._timed_output.first_index + 1)
         path = Path(output_file)
         size = recording_file_size(path)
+        self._segment_had_data = size > 1024
         unhealthy = self._segment_health_error is not None
         if unhealthy:
             # Even a short nonempty failed segment is retained; the next attempt gets a new name.
@@ -183,11 +216,12 @@ class BaseRecorder:
             return {"status": "stopped"}
         logger.info(self._log_message("开始检测直播状态"))
         try:
+            self._recording_options = None
             from app.modules.recording.disk import DiskSpaceError, get_disk_guard
             from app.modules.settings.service import resolve_save_path
 
             guard = get_disk_guard(self.app)
-            directory = resolve_save_path(self.app.state.recording_settings.settings.save_path)
+            directory = resolve_save_path(self.recording_options().save_path)
             await guard.ensure_can_start(directory)
             if manager.checks.get(key) is not token:
                 return {"status": "stopped"}
@@ -255,7 +289,7 @@ class BaseRecorder:
         raise NotImplementedError
 
     async def create_output_prefix(self, live_info, start_time):
-        prefix = await create_output_prefix(self.app, self.room, live_info, start_time)
+        prefix = await create_output_prefix(self.app, self.room, live_info, start_time, settings=self.recording_options())
         self._output_prefix = Path(prefix).resolve()
         get_recording_tasks(self.app).output_prefixes.add(self._output_prefix)
         get_recording_tasks(self.app).output_paths[(self.platform, str(self.room_id))] = self._output_prefix
@@ -301,10 +335,14 @@ class BaseRecorder:
         import os
 
         logger.info(self._log_message("开始后处理"))
-        get_recording_tasks(self.app).phases[(self.platform, str(self.room_id))] = "merging"
+        get_recording_tasks(self.app).phases[(self.platform, str(self.room_id))] = "registering" if self.recording_options().segment_minutes else "merging"
 
         if segment_count <= 0:
             logger.info(self._log_message("没有分段文件，跳过处理"))
+            return
+
+        if self.recording_options().segment_minutes:
+            await self.register_timed_segments(file_name, segment_count, log_id)
             return
 
         formats = {}
@@ -427,3 +465,38 @@ class BaseRecorder:
             logger.exception(self._log_message("清理文件失败: %s"), e)
 
         logger.info(self._log_message("后处理完成"))
+
+    async def register_timed_segments(self, file_name, segment_count, log_id, probe_durations=True):
+        from sqlalchemy import select
+
+        if self._timed_output is not None:
+            _, last_index = await asyncio.to_thread(self._timed_output.observation)
+            segment_count = max(segment_count, last_index)
+        probe = str(Path(get_ffmpeg_path()).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")) if probe_durations else None
+        records = []
+        for index in range(1, segment_count + 1):
+            for extension in ("ts", "flv"):
+                path = Path(f"{file_name}_{index}.{extension}")
+                if not path.is_file() or path.is_symlink() or path.stat().st_size == 0:
+                    continue
+                duration = 0
+                process = None
+                try:
+                    if probe_durations:
+                        process = await asyncio.create_subprocess_exec(probe, "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path),
+                                                                       stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=15)
+                        value = float(json.loads(stdout).get("format", {}).get("duration") or 0)
+                        if math.isfinite(value) and value > 0:
+                            duration = int(value)
+                except (OSError, ValueError, TypeError, TimeoutError):
+                    logger.warning(self._log_message("分片时长读取失败，保留文件并登记大小"))
+                finally:
+                    await self.stop_process(process)
+                records.append(LiveRoomLogVideo(live_room_id=self.room["id"], live_room_log_id=log_id, file_name=path.name,
+                                               file_path=str(path.resolve()), file_size=path.stat().st_size, duration=duration))
+        async with get_db_session(self.app) as db:
+            existing = set((await db.execute(select(LiveRoomLogVideo.file_path).where(LiveRoomLogVideo.live_room_log_id == log_id))).scalars().all())
+            db.add_all([record for record in records if record.file_path not in existing])
+            await db.commit()
+        logger.info(self._log_message("定时分片已独立保存，不执行合并"))
