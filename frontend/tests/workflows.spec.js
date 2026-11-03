@@ -70,7 +70,7 @@ test('room workflow and crawler controls', async ({ page }, testInfo) => {
   expect(requests.find((item) => item.method === 'POST' && item.path === '/api/rooms').body).toEqual({ room_url: 'https://live.douyin.com/67890', remark: '新备注', monitor_enabled: true });
   await page.getByRole('button', { name: '检查 新主播', exact: true }).click();
   await expect(page.getByText('正在直播：正在直播', { exact: true })).toBeVisible();
-  await expect(page.getByText('录制中', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.recording-state').getByText('录制中', { exact: true })).toHaveCount(0);
   await page.getByRole('switch', { name: '监控 新主播' }).uncheck();
   await expect(page.getByRole('switch', { name: '监控 新主播' })).not.toBeChecked();
   await page.getByRole('button', { name: '编辑 新主播' }).click();

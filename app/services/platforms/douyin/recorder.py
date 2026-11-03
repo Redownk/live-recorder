@@ -9,12 +9,13 @@ from sqlalchemy import text
 
 from app.core.logger import get_logger
 from app.core.log_context import recording_log_context
-from app.services.platforms.live_checkers.douyin_live_checker import DouyinLiveChecker
-from app.services.platforms.recorder.base_recorder import BaseRecorder
+from app.services.platforms.douyin.checker import DouyinLiveChecker
+from app.modules.recording.base_recorder import BaseRecorder
+from app.modules.recording.commands import build_recording_command
 from app.modules.recording.health import RecordingHealthError
 from app.modules.recording.disk import DiskSpaceError
 from app.modules.recording.quality import douyin_stream
-from app.services.platforms.recorder import get_ffmpeg_path
+from app.shared.media.ffmpeg import get_ffmpeg_path
 from app.core.session import get_db_session
 
 
@@ -166,7 +167,6 @@ class DouyinRecorder(BaseRecorder):
             "User-Agent: Mozilla/5.0\r\n"
         )
         ffmpeg_path = get_ffmpeg_path()
-        is_m3u8 = ".m3u8" in stream_url.lower()
         reconnect_count = 0
         max_reconnect = 10
         segment_index = 1
@@ -176,29 +176,9 @@ class DouyinRecorder(BaseRecorder):
         data_task = asyncio.create_task(self._collect_live_data_loop(log_id))
         try:
             while reconnect_count < max_reconnect:
-                is_m3u8 = ".m3u8" in stream_url.lower()
-                if is_m3u8:
-                    output_file = f"{file_name}_{segment_index}.ts"
-                    cmd = [
-                        ffmpeg_path,
-                        "-nostdin", "-n",
-                        "-headers", headers,
-                        "-i", stream_url,
-                        "-c", "copy",
-                        "-f", "mpegts",
-                        output_file
-                    ]
-                else:
-                    output_file = f"{file_name}_{segment_index}.flv"
-                    cmd = [
-                        ffmpeg_path,
-                        "-nostdin", "-n",
-                        "-headers", headers,
-                        "-i", stream_url,
-                        "-c", "copy",
-                        "-f", "flv",
-                        output_file
-                    ]
+                output_file, cmd = build_recording_command(
+                    ffmpeg_path, stream_url, file_name, segment_index, headers,
+                )
                 try:
                     process = await self.spawn_recording_process(cmd)
                     logger.info(self._log_message("ffmpeg 启动"))

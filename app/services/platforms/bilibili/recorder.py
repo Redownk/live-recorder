@@ -6,9 +6,10 @@ import time
 from app.core.session import get_db_session
 from app.core.logger import get_logger
 from app.core.log_context import recording_log_context
-from app.services.platforms.live_checkers.bilibili_live_checker import BiliLiveChecker
-from app.services.platforms.recorder import get_ffmpeg_path
-from app.services.platforms.recorder.base_recorder import BaseRecorder
+from app.services.platforms.bilibili.checker import BiliLiveChecker
+from app.shared.media.ffmpeg import get_ffmpeg_path
+from app.modules.recording.base_recorder import BaseRecorder
+from app.modules.recording.commands import build_recording_command
 from app.modules.recording.health import RecordingHealthError
 from app.modules.recording.disk import DiskSpaceError
 from datetime import datetime
@@ -69,19 +70,11 @@ class BilibiliRecorder(BaseRecorder):
 
     @recording_log_context
     async def record_loop(self,log_id,file_name,stream_url):
-        # headers=BiliLiveChecker.build_fake_headers()
-        # 获取 headers 字典
         header_dict = BiliLiveChecker.build_fake_headers()
-
-        # 将字典转换为 FFmpeg 所需的字符串格式
-        # 格式示例: "Referer: https://live.bilibili.com\r\nUser-Agent: Mozilla/5.0..."
-        headers_str = ""
-        for key, value in header_dict.items():
-            headers_str += f"{key}: {value}\r\n"
+        headers_str = "".join(f"{key}: {value}\r\n" for key, value in header_dict.items())
 
         ffmpeg_path=get_ffmpeg_path()
 
-        is_m3u8 = ".m3u8" in stream_url.lower()
 
         reconnect_count = 0
         max_reconnect = 10
@@ -93,29 +86,9 @@ class BilibiliRecorder(BaseRecorder):
         data_task = asyncio.create_task(self._collect_live_data_loop(log_id))
         try:
             while reconnect_count < max_reconnect:
-                is_m3u8 = ".m3u8" in stream_url.lower()
-                if is_m3u8:
-                    output_file = f"{file_name}_{segment_index}.ts"
-                    cmd = [
-                        ffmpeg_path,
-                        "-nostdin", "-n",
-                        "-headers", headers_str,
-                        "-i", stream_url,
-                        "-c", "copy",
-                        "-f", "mpegts",
-                        output_file
-                    ]
-                else:
-                    output_file = f"{file_name}_{segment_index}.flv"
-                    cmd = [
-                        ffmpeg_path,
-                        "-nostdin", "-n",
-                        "-headers", headers_str,
-                        "-i", stream_url,
-                        "-c", "copy",
-                        "-f", "flv",
-                        output_file
-                    ]
+                output_file, cmd = build_recording_command(
+                    ffmpeg_path, stream_url, file_name, segment_index, headers_str,
+                )
                 try:
                     process = await self.spawn_recording_process(cmd)
 

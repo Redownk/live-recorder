@@ -22,8 +22,8 @@ from app.modules.recording.disk import get_disk_guard
 from app.modules.recording.status import get_recording_status
 from app.modules.recording.tasks import get_recording_tasks
 from app.modules.settings.service import resolve_save_path
-from app.services.platforms.recorder import get_ffmpeg_path
-from app.services.platforms.recorder.base_recorder import BaseRecorder
+from app.shared.media.ffmpeg import get_ffmpeg_path
+from app.modules.recording.base_recorder import BaseRecorder
 
 
 HARDWARE_ENCODERS = {"h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv", "h264_amf", "hevc_amf", "h264_videotoolbox", "hevc_videotoolbox"}

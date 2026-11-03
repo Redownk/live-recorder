@@ -12,8 +12,9 @@ import httpx
 from requests.utils import DEFAULT_ACCEPT_ENCODING
 
 from app.core.config import local_config
-from app.services.platforms.common.util import client
-from app.services.platforms.live_checkers import random_user_agent, match1, json_loads
+from app.services.platforms.common.http import client
+from app.services.platforms.common.user_agent import random_user_agent
+from app.services.platforms.common.parsing import match1, json_loads
 
 
 logger = logging.getLogger("DouyuLiveChecker")
@@ -36,7 +37,8 @@ class DouyuLiveChecker:
 
     @staticmethod
     def build_fake_headers() -> dict:
-        fake_headers = DouyuLiveChecker.fake_headers
+        """返回独立的请求头，避免并发请求修改共享模板。"""
+        fake_headers = DouyuLiveChecker.fake_headers.copy()
         douyu_config = local_config.get("platforms", {}).get("douyu", {})
         fake_headers["user-agent"] = random_user_agent()
         fake_headers["referer"] = f"https://{DOUYU_WEB_DOMAIN}/"
@@ -76,18 +78,7 @@ class DouyuLiveChecker:
                 or room_data.get("show_nick")
                 or ""
             )
-            avatar = (
-                # room_data.get("avatar")
-                # or room_data.get("owner_avatar")
-                # or room_data.get("room_src")
-                # or ""
-                room_data.get("owner_avatar")
-            )
-            # sec_uid = (
-            #     str(room_data.get("owner_uid"))
-            #     if room_data.get("owner_uid") is not None
-            #     else str(room_data.get("up_id") or room_data.get("uid") or room_id)
-            # )
+            avatar = room_data.get("owner_avatar")
 
             return {
                 "platform": "DOUYU",

@@ -15,8 +15,8 @@ from app.models import LiveRoom
 from app.modules.observability.diagnostics import HARDWARE_ENCODERS, capture, diagnose, diagnostic_archive, issues
 from app.modules.observability.redaction import export_safe, redact
 from app.modules.recording.status import get_recording_status
-from app.services.platforms.recorder import get_ffmpeg_path
-from app.services.platforms.recorder_factory import create_recorder
+from app.shared.media.ffmpeg import get_ffmpeg_path
+from app.modules.recording.factory import create_recorder
 from app.shared.filesystem.access import check_directory_access
 
 

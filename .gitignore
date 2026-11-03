@@ -16,3 +16,4 @@ frontend/playwright-report/
 build/
 dist/
 logs/
+tests/

@@ -12,7 +12,7 @@ from pathlib import Path
 from app.core.session import get_db_session
 from app.core.logger import get_logger
 from app.core.log_context import recording_log_context
-from app.services.platforms.recorder import get_ffmpeg_path
+from app.shared.media.ffmpeg import get_ffmpeg_path
 from app.models import LiveRoomLogVideo
 from app.modules.settings.service import create_output_prefix
 from app.modules.recording.status import get_recording_status

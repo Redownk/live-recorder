@@ -12,7 +12,7 @@ from app.core.session import get_db
 from app.models import LiveRoom, LiveRoomLog, LiveRoomLogVideo, LiveRoomStats, RoomRecordingSettings
 from app.modules.live_rooms.schemas import LiveRoomCreate, LiveRoomOut, LiveRoomUpdate, MonitorUpdate, RecordingStop
 from app.modules.live_rooms.checker import LiveChecker
-from app.services.platforms.recorder_factory import create_recorder
+from app.modules.recording.factory import create_recorder
 from app.modules.recording.status import get_recording_status
 from app.modules.recording.tasks import get_recording_tasks
 from app.modules.recording.disk import DiskSpaceError

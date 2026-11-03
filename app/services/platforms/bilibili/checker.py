@@ -5,8 +5,10 @@ import time
 import logging
 from requests.utils import DEFAULT_ACCEPT_ENCODING
 from app.core.config import local_config
-from app.services.platforms.common.util import client
-from app.services.platforms.live_checkers import random_user_agent,match1,json_loads,wbi
+from app.services.platforms.common.http import client
+from app.services.platforms.common.user_agent import random_user_agent
+from app.services.platforms.common.parsing import match1
+from app.services.platforms.bilibili.signing import wbi
 import json
 from app.modules.recording.quality import quality_index
 
@@ -21,7 +23,8 @@ class BiliLiveChecker:
 
     @staticmethod
     def build_fake_headers() -> dict:
-        fake_headers = BiliLiveChecker.fake_headers
+        """返回独立的请求头，避免并发请求修改共享模板。"""
+        fake_headers = BiliLiveChecker.fake_headers.copy()
         bilibili_config = local_config.get("platforms", {}).get("bilibili", {})
         fake_headers["cookie"] = bilibili_config.get("cookie", "") or ""
 
@@ -29,67 +32,39 @@ class BiliLiveChecker:
 
 
     @staticmethod
-    async def get_user_info(url: str, cookie: str = None):
-        """
-        拆解逻辑：对应 douyin_live_checker 的 get_user_info
-        获取房间ID、标题、主播UID等基础信息
-        """
-        # headers = {
-        #     'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        #     'accept-encoding': DEFAULT_ACCEPT_ENCODING,
-        #     'accept-language': 'zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3',
-        #     'user-agent': random_user_agent(),
-        #     'Referer': url
-        # }
-        # if cookie:
-        #     headers['cookie'] = cookie
+    async def get_user_info(url: str):
+        """解析直播链接并查询主播信息。
 
-        # 1. 处理短链接跳转
+        Args:
+            url: 哔哩哔哩直播链接或 b23.tv 短链接。
+
+        Returns:
+            包含平台、房间和主播字段的查询结果；平台返回错误时标记为 error。
+        """
         if "b23.tv" in url:
-            resp = await client.get(url, follow_redirects=False)
-            url = str(resp.next_request.url)
+            response = await client.get(url, follow_redirects=False)
+            if response.is_error:
+                response.raise_for_status()
+            if response.next_request is None:
+                raise ValueError("短链接未返回直播间跳转地址")
+            url = str(response.next_request.url)
 
         room_id = match1(url, r'bilibili.com/(\d+)')
-
-        # # 2. 更新 WBI 签名
-        # if int(time.time()) - wbi.last_update >= wbi.UPDATE_INTERVAL:
-        #     await BiliLiveChecker.update_wbi_context(headers)
-
-        # 3. 请求房间基础信息
-        # params = {"room_id": room_id, "web_location": BiliUtils.WBI_WEB_LOCATION}
-        # wbi.sign(params)
-
-        # resp = await client.get(f"{BiliUtils.OFFICIAL_API}/xlive/web-room/v1/index/getInfoByRoom",
-        #                         params=params, headers=headers)
-        # data = resp.json()
-        data=await BiliLiveChecker.get_room_info(room_id)
-        is_live=True
-        # if data['code'] != 0 or data['data']['room_info']['live_status'] != 1:
-            # return None  # 未开播或错误
-            # is_live=False
+        if room_id is None:
+            raise ValueError("无法从链接中解析直播间编号")
+        data = await BiliLiveChecker.get_room_info(room_id)
         if data['code'] != 0:
-            return {
-                "platform": "BILIBILI",
-                "available":False,
-                "result":"error",
-            }
+            return {"platform": "BILIBILI", "available": False, "result": "error"}
+
         room_info = data['data']['room_info']
-        # return {
-        #     "is_live": is_live,
-        #     "room_id": room_info['room_id'],
-        #     "title": room_info['title'],
-        #     "uid": room_info['uid'],
-        #     "cover": room_info['cover'],
-        #     "live_start_time": room_info['live_start_time'],
-        #     "special_type": room_info['special_type']
-        # }
+        anchor_info = data['data']['anchor_info']['base_info']
         return {
-            "platform":"BILIBILI",
+            "platform": "BILIBILI",
             "roomId": room_info['room_id'],
-            'secUid': room_info['uid'],
-            "owner": data['data']['anchor_info']['base_info']['uname'],
-            "avatar": data['data']['anchor_info']['base_info']['face'],
-            "result":"success"
+            "secUid": room_info['uid'],
+            "owner": anchor_info['uname'],
+            "avatar": anchor_info['face'],
+            "result": "success",
         }
 
     @staticmethod
@@ -108,10 +83,7 @@ class BiliLiveChecker:
 
     @staticmethod
     async def get_play_api_data(room_id: int, qn: int) -> dict:
-        """
-        拆解逻辑：对应 get_web_room_info
-        获取直播接口的原始 JSON 数据
-        """
+        """查询指定房间和清晰度的播放信息。"""
         headers=BiliLiveChecker.build_fake_headers()
         params = {
             'room_id': str(room_id),
@@ -132,10 +104,7 @@ class BiliLiveChecker:
 
     @staticmethod
     async def get_stream_url(room_id: int, qn: int, protocol: str, quality: str = "best") -> str:
-        """
-        拆解逻辑：对应获取直播流方法
-        从 API 数据中解析出最终可用的播放地址
-        """
+        """按画质和协议选择 CDN 播放地址，无播放信息时返回 None。"""
 
         play_info = await BiliLiveChecker.get_play_api_data(room_id, qn)
         if not play_info or not play_info.get('playurl_info'):
@@ -159,7 +128,6 @@ class BiliLiveChecker:
         streams = play_info['playurl_info']['playurl']['stream']
 
         # 默认解析第一个流 (FLV 或 HLS)
-        # 对应原逻辑中 aget_stream 的选择逻辑
         if protocol == 'hls_fmp4' and len(streams) > 1:
             codec_data = streams[1]['format'][0]['codec'][0]
         else:

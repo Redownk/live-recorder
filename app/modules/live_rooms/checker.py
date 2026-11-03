@@ -3,9 +3,9 @@
 
 import re
 
-from app.services.platforms.live_checkers.bilibili_live_checker import BiliLiveChecker
-from app.services.platforms.live_checkers.douyin_live_checker import DouyinLiveChecker
-from app.services.platforms.live_checkers.douyu_live_checker import DouyuLiveChecker
+from app.services.platforms.bilibili.checker import BiliLiveChecker
+from app.services.platforms.douyin.checker import DouyinLiveChecker
+from app.services.platforms.douyu.checker import DouyuLiveChecker
 
 
 class LiveChecker:

@@ -4,7 +4,7 @@
 import asyncio
 from time import monotonic
 from sqlalchemy import text
-from app.services.platforms.recorder_factory import create_recorder
+from app.modules.recording.factory import create_recorder
 from app.core.logger import setup_logging, get_logger
 from app.core.log_context import room_log_fields
 from app.modules.recording.disk import DiskSpaceError

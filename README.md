@@ -88,6 +88,9 @@ app/
       tasks.py
       status.py
       recovery.py
+      base_recorder.py        # 通用录制流程、健康检测和文件处理
+      commands.py             # 共用 FFmpeg 录制命令
+      factory.py              # 按平台创建录制器
     settings/                 # 录制设置与文件命名规则
       api.py
       service.py
@@ -98,7 +101,13 @@ app/
   shared/filesystem/          # 目录/视频文件浏览和访问限制
     browser.py
     access.py
-  services/platforms/        # 各直播平台的 checker 与 recorder 适配器
+  shared/media/              # FFmpeg 工具定位
+    ffmpeg.py
+  services/platforms/        # 按平台集中放置适配器
+    bilibili/                 # checker.py、recorder.py、signing.py
+    douyin/                   # checker.py、recorder.py、signing.py
+    douyu/                    # checker.py、recorder.py
+    common/                   # HTTP 客户端、响应解析和 User-Agent 工具
   core/                      # 配置、数据库、日志和单实例锁
   models.py                  # 共享 SQLite 数据模型
 ```
@@ -289,6 +298,9 @@ FFmpeg 和同目录的 FFprobe 必须可用。接口位于 `/api/processing`，�
 
 后端回归验证：`python -m unittest discover -s tests -v`（使用独立临时数据库）。
 
+直播间列表支持按录制状态筛选，可与关键词搜索组合使用；筛选结果随状态自动刷新，
+列表底部显示匹配数量。状态查询失败时显示“状态不可用”，不会将其归为“未录制”。
+
 ## 运行日志与故障诊断
 
 直播间操作列的「运行日志」按钮打开当前房间日志弹窗；原有「录制日志」仍用于查看历次录制与视频。
@@ -302,6 +314,10 @@ FFmpeg 和同目录的 FFprobe 必须可用。接口位于 `/api/processing`，�
 保留控制台输出；文件写入在独立线程执行，队列最多 2000 条，内存尾部最多 1000 条。
 队列满时不阻塞录制，页面和诊断结果会提示丢弃数量；文件不可写时保留内存日志并显示告警。
 关闭服务等待队列写入完成。文件轮转后的过期历史不会永久保留。
+
+HTTP 访问日志（`uvicorn.access`）单独保存到 `logs/access.log`，不再输出到控制台或运行日志页面。
+文件采用 UTF-8 编码和相同的脱敏规则，沿用 `logging.max_file_mb` 与 `logging.backups` 的轮转配置，
+历史文件依次为 `access.log.1`、`access.log.2` 等，重启后生效。
 
 日志记录结构化的 `room_id`（内部 ID）、`platform_room_id`（平台房间号）、`recording_log_id` 和
 `processing_job_id`，不依靠解析主播名来识别房间。对 Cookie、认证头、已配置的敏感值、

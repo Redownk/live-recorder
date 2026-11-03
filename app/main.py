@@ -135,16 +135,6 @@ async def index():
     return {"name": "Live Recorder API", "docs": "/docs"}
 
 
-@app.get("/actuator/health")
-async def health():
-    return {
-        "status": "UP",
-        "components": {
-            "database": "UP",
-        },
-    }
-
-
 @app.get("/{frontend_path:path}", include_in_schema=False)
 async def frontend(frontend_path: str):
     if frontend_path.split("/", 1)[0] in {"api", "crawler", "live", "actuator", "docs", "redoc", "openapi.json"}:

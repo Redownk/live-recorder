@@ -59,14 +59,14 @@ test('individual recording start and both stop modes leave other room unchanged'
   await page.goto('/rooms');
   await page.getByRole('button', { name: '录制 主播1', exact: true }).click();
   await expect(page.getByRole('button', { name: '录制 主播1', exact: true })).toBeDisabled();
-  await expect(page.getByText('录制中', { exact: true })).toHaveCount(2);
+  await expect(page.locator('.recording-state').getByText('录制中', { exact: true })).toHaveCount(2);
   await page.getByRole('button', { name: '停止录制 主播1', exact: true }).click();
   await expect(page.getByRole('radio', { name: '停止并暂停监控', exact: true })).toBeChecked();
   await page.getByRole('radio', { name: '停止本次，保留监控', exact: true }).check();
   await page.screenshot({ path: testInfo.outputPath('stop-dialog.png'), fullPage: true });
   await page.getByRole('button', { name: '确认停止', exact: true }).click();
   await expect(page.getByRole('switch', { name: '监控 主播1', exact: true })).toBeChecked();
-  await expect(page.getByText('录制中', { exact: true })).toHaveCount(1);
+  await expect(page.locator('.recording-state').getByText('录制中', { exact: true })).toHaveCount(1);
   await page.getByRole('button', { name: '停止录制 主播1', exact: true }).click();
   await page.getByRole('button', { name: '确认停止', exact: true }).click();
   await expect(page.getByRole('switch', { name: '监控 主播1', exact: true })).not.toBeChecked();

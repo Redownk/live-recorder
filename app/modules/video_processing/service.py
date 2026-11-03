@@ -12,8 +12,8 @@ from uuid import uuid4
 from app.core.logger import get_logger
 from app.core.log_context import processing_log_context
 from app.shared.filesystem.browser import VIDEO_EXTENSIONS
-from app.services.platforms.recorder import get_ffmpeg_path
-from app.services.platforms.recorder.base_recorder import BaseRecorder
+from app.shared.media.ffmpeg import get_ffmpeg_path
+from app.modules.recording.base_recorder import BaseRecorder
 from app.modules.settings.service import resolve_save_path
 from app.modules.video_processing.schemas import ENCODERS
 

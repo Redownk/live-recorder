@@ -1,18 +1,21 @@
 """解析抖音直播链接，生成请求参数和签名，并查询网页端及移动端直播信息。"""
 
 
+import asyncio
 import logging
 
 from requests.utils import DEFAULT_ACCEPT_ENCODING
 import random
 import re
+from threading import Lock
 from typing import Optional
 from app.core.config import local_config
-from app.services.platforms.live_checkers import random_user_agent,match1,json_loads
+from app.services.platforms.common.user_agent import random_user_agent
+from app.services.platforms.common.parsing import match1, json_loads
 import requests
-from urllib.parse import unquote, urlparse, parse_qs, urlencode, urlunparse
-from app.services.platforms.common.abogus import ABogus
-from app.services.platforms.common.util import client
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from app.services.platforms.douyin.signing import ABogus
+from app.services.platforms.common.http import client
 
 class DouyinLiveChecker:
     fake_headers = {
@@ -25,7 +28,8 @@ class DouyinLiveChecker:
 
     @staticmethod
     def build_fake_headers() -> dict:
-        fake_headers = DouyinLiveChecker.fake_headers
+        """返回携带平台 Cookie 的独立请求头。"""
+        fake_headers = DouyinLiveChecker.fake_headers.copy()
         douyin_config = local_config.get("platforms", {}).get("douyin", {})
         fake_headers['user-agent'] = DouyinUtils.DOUYIN_USER_AGENT
         fake_headers['referer'] = "https://live.douyin.com/"
@@ -34,12 +38,14 @@ class DouyinLiveChecker:
         if fake_headers['cookie'] != "" and not fake_headers['cookie'].endswith(';'):
             fake_headers['cookie'] += ";"
         if "ttwid" not in fake_headers['cookie']:
-            fake_headers['cookie'] += f'ttwid={DouyinUtils.get_ttwid()};'
+            ttwid = DouyinUtils.get_ttwid()
+            if ttwid:
+                fake_headers['cookie'] += f'ttwid={ttwid};'
         if 'odin_ttid=' not in fake_headers['cookie']:
             fake_headers['cookie'] += f"odin_ttid={DouyinUtils.generate_odin_ttid()};"
         if '__ac_nonce=' not in fake_headers['cookie']:
             fake_headers['cookie'] += f"__ac_nonce={DouyinUtils.generate_nonce()};"
-        return DouyinLiveChecker.fake_headers
+        return fake_headers
 
     @staticmethod
     async def parse_user_unique_id(url: str, headers: dict) -> Optional[str]:
@@ -59,20 +65,19 @@ class DouyinLiveChecker:
         se__sec_uid=None
         se__room_id=None
         se__web_rid=None
-        se__room_title=None
         se__owner=None
         se__avatar=None
-        fake_headers = DouyinLiveChecker.build_fake_headers()
+        fake_headers = await asyncio.to_thread(DouyinLiveChecker.build_fake_headers)
 
 
         if 'v.douyin' in url:
             try:
                 resp = await client.get(url, headers=fake_headers, follow_redirects=False)
-            except:
+            except Exception:
                 return False
             try:
                 if resp.status_code not in {301, 302}:
-                    raise
+                    raise ValueError("短链接未返回直播间跳转地址")
                 next_url = str(resp.next_request.url)
                 if "webcast.amemv" in next_url:
                     se__sec_uid = match1(next_url, r"sec_user_id=(.*?)&")
@@ -80,8 +85,8 @@ class DouyinLiveChecker:
                 elif "isedouyin.com/share/user" in next_url:
                     se__sec_uid = match1(next_url, r"sec_uid=(.*?)&")
                 else:
-                    raise
-            except:
+                    raise ValueError("不支持的抖音跳转地址")
+            except Exception:
                 logger.error("不支持的链接")
                 return False
         elif "/user/" in url:
@@ -90,11 +95,11 @@ class DouyinLiveChecker:
                 se__sec_uid = user_path
                 try:
                     se__web_rid = await DouyinLiveChecker.parse_user_unique_id(url, fake_headers)
-                except:
+                except Exception:
                     logger.exception(f"房间号获取失败")
         else:
             web_rid = url.split('douyin.com/')[1].split('/')[0].split('?')[0]
-            if web_rid[0] == "+":
+            if web_rid.startswith("+"):
                 web_rid = web_rid[1:]
             se__web_rid = web_rid
 
@@ -122,31 +127,19 @@ class DouyinLiveChecker:
                 except (KeyError, IndexError):
                     # 如果 移动网页 端也没有数据，当做未开播处理
                     room_info = _room_info['data'].get('room', {})
-                    # 当做未开播处理
-                    # if not room_info:
-                    #     logger.info(f"{self.plugin_msg}: 获取直播间信息失败 {_room_info}")
                 if room_info.get('status') != 2:
                     logger.debug("未开播")
                 se__room_id = room_info['id_str']
-                se__room_title = room_info['title']
 
 
-        except:
+        except Exception:
             logger.exception(f": 获取直播间信息失败")
-            # return False
             return {
                 "platform": "DOUYIN",
                 "available": False,
                 "result": "error",
             }
 
-        # return {
-        #     "web_rid": se__web_rid,
-        #     "sec_uid": se__sec_uid,
-        #     "room_id": se__room_id,
-        #     "room_title": se__room_title,
-        #     "owner": se__owner
-        # }
         return {
             "platform":"DOUYIN",
             "roomId":se__web_rid,
@@ -160,11 +153,10 @@ class DouyinLiveChecker:
     @staticmethod
     async def get_web_room_info(web_rid: str) -> dict:
         logger = logging.getLogger("DouyinLiveChecker")
-        fake_headers = DouyinLiveChecker.build_fake_headers()
+        fake_headers = await asyncio.to_thread(DouyinLiveChecker.build_fake_headers)
 
         query = {
             'app_name': 'douyin_web',
-            # 'enter_from': random.choice(['link_share', 'web_live']),
             'enter_from': 'web_live',
             'live_id': '1',
             'web_rid': web_rid,
@@ -179,9 +171,7 @@ class DouyinLiveChecker:
 
     @staticmethod
     async def get_h5_room_info(sec_user_id: str, room_id: str) -> dict:
-        '''
-               Mobile web 的 API 信息，海外可能不允许使用
-               '''
+        """查询抖音移动网页端直播信息。"""
         if not sec_user_id:
             raise ValueError("sec_user_id is None")
         query = {
@@ -194,13 +184,11 @@ class DouyinLiveChecker:
         }
         abogus = ABogus(user_agent=DouyinUtils.DOUYIN_USER_AGENT)
         query_str, _, _, _ = abogus.generate_abogus(params=urlencode(query, doseq=True), body="")
-        # target_url = DouyinUtils.build_request_url(f"https://live.douyin.com/webcast/room/web/enter/", query)
         info = await client.get(
             f"https://webcast.amemv.com/webcast/room/reflow/info/?{query_str}",
-            headers=DouyinLiveChecker.build_fake_headers()
+            headers=await asyncio.to_thread(DouyinLiveChecker.build_fake_headers)
         )
         info = json_loads(info.text)
-        # logger.debug(f": get_h5_room_info {info}")
         return info
 
 
@@ -208,7 +196,7 @@ class DouyinLiveChecker:
 class DouyinUtils:
     # 抖音ttwid
     _douyin_ttwid: Optional[str] = None
-    # DOUYIN_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36'
+    _ttwid_lock = Lock()
     DOUYIN_USER_AGENT = random_user_agent()
     DOUYIN_HTTP_HEADERS = {
         'user-agent': DOUYIN_USER_AGENT
@@ -218,10 +206,15 @@ class DouyinUtils:
 
     @staticmethod
     def get_ttwid() -> Optional[str]:
+        """获取并缓存平台 Cookie，在工作线程之间串行初始化缓存。"""
+        if DouyinUtils._douyin_ttwid:
+            return DouyinUtils._douyin_ttwid
+        with DouyinUtils._ttwid_lock:
             if not DouyinUtils._douyin_ttwid:
                 page = requests.get("https://live.douyin.com/1-2-3-4-5-6-7-8-9-0", timeout=15)
+                page.raise_for_status()
                 DouyinUtils._douyin_ttwid = page.cookies.get("ttwid")
-            return DouyinUtils._douyin_ttwid
+        return DouyinUtils._douyin_ttwid
 
 
     @staticmethod
@@ -244,10 +237,11 @@ class DouyinUtils:
 
     @staticmethod
     def build_request_url(url: str, query: Optional[dict] = None) -> str:
-        # NOTE: 不能在类级别初始化，否则非首次生成的 abogus 有问题，原因未知
+        # 签名器持有可变的加密状态，每个请求使用独立实例。
         abogus = ABogus(user_agent=DouyinUtils.DOUYIN_USER_AGENT)
         parsed_url = urlparse(url)
-        existing_params = query or parse_qs(parsed_url.query)
+        # 签名所需的默认参数仅用于本次请求，不修改调用方传入的字典。
+        existing_params = dict(query) if query is not None else parse_qs(parsed_url.query)
         existing_params['aid'] = ['6383']
         existing_params['compress'] = ['gzip']
         existing_params['device_platform'] = ['web']

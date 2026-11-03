@@ -20,7 +20,7 @@ async def self_test():
     import httpx
     from sqlalchemy import text
     from app import main
-    from app.services.platforms.recorder import get_ffmpeg_path
+    from app.shared.media.ffmpeg import get_ffmpeg_path
 
     local_config.setdefault("crawler", {})["auto_start"] = False
     await main.startup_event()
