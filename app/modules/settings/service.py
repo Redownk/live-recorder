@@ -1,3 +1,6 @@
+"""解析全局与房间录制配置，生成安全文件名并校验输出目录。"""
+
+
 import asyncio
 import re
 import tempfile

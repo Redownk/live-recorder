@@ -1,3 +1,6 @@
+"""定义直播间创建、更新、查询和录制控制的请求与响应结构。"""
+
+
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field

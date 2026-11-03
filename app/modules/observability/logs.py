@@ -1,3 +1,6 @@
+"""读取运行日志，支持倒序扫描、筛选以及近期问题查询。"""
+
+
 from collections import deque
 from datetime import datetime, timezone
 import json

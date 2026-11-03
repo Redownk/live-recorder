@@ -1,3 +1,6 @@
+"""适配抖音直播状态和画质选择，执行录制并定期采集直播统计。"""
+
+
 import asyncio
 import json
 import time

@@ -1,3 +1,6 @@
+"""提供服务启动入口和打包自检命令，自检覆盖前端、数据库与 FFmpeg 工具。"""
+
+
 import argparse
 import asyncio
 import json

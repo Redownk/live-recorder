@@ -1,3 +1,6 @@
+"""创建 FastAPI 应用、注册路由，并协调数据库、后台任务和日志的启动与关闭。"""
+
+
 import asyncio
 import os
 import sys

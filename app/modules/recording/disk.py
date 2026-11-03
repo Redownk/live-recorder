@@ -1,3 +1,6 @@
+"""检查录制磁盘剩余空间，在空间不足时阻止或停止录制。"""
+
+
 import asyncio
 import shutil
 from pathlib import Path

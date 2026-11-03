@@ -1,3 +1,6 @@
+"""定义录制配置、直播间、录制日志、统计数据和视频文件的数据库模型。"""
+
+
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Integer, String, Text, text

@@ -1,3 +1,6 @@
+"""解析视频输入和输出路径，构建 FFmpeg 命令并管理处理任务。"""
+
+
 import asyncio
 import json
 import math

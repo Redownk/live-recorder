@@ -1,3 +1,6 @@
+"""提供单个直播间的录制配置查询、预览、保存和重置接口。"""
+
+
 import asyncio
 from datetime import datetime
 

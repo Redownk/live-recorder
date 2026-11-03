@@ -1,3 +1,6 @@
+"""根据直播链接识别平台，并将信息查询分发到对应的平台检测器。"""
+
+
 import re
 
 from app.services.platforms.live_checkers.bilibili_live_checker import BiliLiveChecker
@@ -6,6 +9,8 @@ from app.services.platforms.live_checkers.douyu_live_checker import DouyuLiveChe
 
 
 class LiveChecker:
+    """识别直播链接的平台，并调用对应的平台信息查询实现。"""
+
     PLATFORM_PATTERNS = {
         "douyin": re.compile(r"https?://(?:(?:www|m|live|v)\.)?douyin\.com"),
         "bilibili": re.compile(r"https?://(b23\.tv|live\.bilibili\.com)"),
@@ -14,8 +19,16 @@ class LiveChecker:
 
     @staticmethod
     def detect_platform(url: str) -> str:
-        """
-        根据 URL 判断平台
+        """根据直播链接识别平台。
+
+        Args:
+            url: 待识别的直播链接。
+
+        Returns:
+            小写平台标识 douyin、bilibili 或 douyu。
+
+        Raises:
+            ValueError: 链接不属于受支持的平台。
         """
         for name, pattern in LiveChecker.PLATFORM_PATTERNS.items():
             if pattern.search(url):
@@ -25,8 +38,16 @@ class LiveChecker:
 
     @staticmethod
     async def check(url: str) -> dict:
-        """
-        根据 URL 检测直播信息
+        """调用对应平台的检测器查询直播间信息。
+
+        Args:
+            url: 待查询的直播链接。
+
+        Returns:
+            平台检测器的查询结果；具体字段和失败结果由平台实现决定。
+
+        Raises:
+            ValueError: 链接平台不受支持或尚未实现。
         """
 
         platform = LiveChecker.detect_platform(url)

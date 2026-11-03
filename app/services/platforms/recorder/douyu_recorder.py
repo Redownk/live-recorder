@@ -1,3 +1,6 @@
+"""适配斗鱼直播状态、播放流刷新和录制流程。"""
+
+
 import asyncio
 import time
 from datetime import datetime

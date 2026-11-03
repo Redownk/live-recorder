@@ -1,3 +1,6 @@
+"""解析斗鱼房间链接，查询直播状态并处理播放流请求所需的签名。"""
+
+
 import asyncio
 import hashlib
 import logging

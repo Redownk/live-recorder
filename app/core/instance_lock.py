@@ -1,3 +1,6 @@
+"""通过实例锁防止多个服务进程同时操作同一数据库。"""
+
+
 import os
 from pathlib import Path
 

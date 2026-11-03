@@ -1,3 +1,6 @@
+"""适配哔哩哔哩直播状态、播放流和录制流程。"""
+
+
 import asyncio
 import time
 from app.core.session import get_db_session

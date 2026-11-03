@@ -1,3 +1,6 @@
+"""维护内存中的录制会话状态，汇总录制阶段、健康信息和分片进度。"""
+
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import monotonic

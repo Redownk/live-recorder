@@ -1,3 +1,6 @@
+"""接收直播链接检测请求，返回平台解析出的直播间信息。"""
+
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from app.modules.live_rooms.checker import LiveChecker

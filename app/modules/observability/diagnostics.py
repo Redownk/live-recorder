@@ -1,3 +1,6 @@
+"""检查运行环境、平台和编码能力，并生成可导出的诊断信息。"""
+
+
 import asyncio
 import copy
 from datetime import datetime, timezone

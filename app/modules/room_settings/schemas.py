@@ -1,3 +1,6 @@
+"""定义直播间可覆盖的录制选项，未覆盖项由全局配置提供。"""
+
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator

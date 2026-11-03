@@ -1,12 +1,19 @@
+"""采集录制进度和文件增长情况，为启动超时与录制停滞检测提供依据。"""
+
+
 from pathlib import Path
 from time import monotonic
 
 
 class RecordingHealthError(RuntimeError):
+    """表示录制健康检查失败且无法继续录制。"""
+
     pass
 
 
 class RecordingHealthSample:
+    """跟踪文件增长和 FFmpeg 媒体时间，判断录制是否正常推进。"""
+
     def __init__(self, *, progress_expected=True):
         self.started_at = monotonic()
         self.last_growth = self.started_at
@@ -36,6 +43,14 @@ class RecordingHealthSample:
         self.file_size = size
 
     def failure(self, options):
+        """根据最近采样判断是否启动超时或录制停滞。
+
+        Args:
+            options: 包含启动超时和停滞超时秒数的录制配置。
+
+        Returns:
+            检测到故障时返回原因说明，否则返回 None。
+        """
         now = monotonic()
         ready = self.has_file and (self.has_progress or not self.progress_expected)
         if not ready:
@@ -65,6 +80,14 @@ class RecordingHealthSample:
 
 
 def recording_file_size(path):
+    """读取录制文件大小。
+
+    Args:
+        path: 录制文件路径。
+
+    Returns:
+        文件字节数；文件不存在或无法读取时返回 0。
+    """
     try:
         return Path(path).stat().st_size
     except OSError:

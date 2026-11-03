@@ -1,3 +1,6 @@
+"""提供本地视频浏览、编码能力查询和视频处理任务控制接口。"""
+
+
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query, Request

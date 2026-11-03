@@ -1,3 +1,6 @@
+"""定义视频处理的输入、输出、编码和合并选项。"""
+
+
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator

@@ -1,3 +1,6 @@
+"""配置日志输出、敏感信息脱敏及运行日志采集的生命周期。"""
+
+
 import copy
 import logging
 import sys

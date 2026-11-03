@@ -1,3 +1,6 @@
+"""解析抖音直播链接，生成请求参数和签名，并查询网页端及移动端直播信息。"""
+
+
 import logging
 
 from requests.utils import DEFAULT_ACCEPT_ENCODING

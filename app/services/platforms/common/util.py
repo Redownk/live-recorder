@@ -1,3 +1,6 @@
+"""配置平台请求共用的异步 HTTP 客户端、超时、连接池和证书信任。"""
+
+
 import asyncio
 import json
 

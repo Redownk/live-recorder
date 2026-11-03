@@ -1,3 +1,6 @@
+"""统一定位程序资源和持久化数据目录，兼容源码运行与打包环境。"""
+
+
 import os
 from pathlib import Path
 import sys

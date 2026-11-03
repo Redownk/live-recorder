@@ -1,3 +1,6 @@
+"""提供全局录制配置、目录浏览、磁盘状态和配置预览接口。"""
+
+
 from datetime import datetime
 import asyncio
 

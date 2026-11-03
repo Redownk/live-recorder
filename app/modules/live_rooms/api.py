@@ -1,3 +1,6 @@
+"""提供直播间管理、单房间录制控制以及录制日志、视频和统计查询接口。"""
+
+
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status

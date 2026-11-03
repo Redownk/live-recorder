@@ -1,3 +1,6 @@
+"""收集配置中的敏感值，并在日志和诊断导出时执行脱敏。"""
+
+
 import re
 from urllib.parse import urlsplit
 

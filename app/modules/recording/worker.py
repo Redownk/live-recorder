@@ -1,3 +1,5 @@
+"""按各直播间的检查间隔轮询开播状态，并响应设置变更和停止信号。"""
+
 
 import asyncio
 from time import monotonic
@@ -12,16 +14,30 @@ logger = get_logger(__name__)
 
 
 async def wait_for_next_check(stop_event, settings_changed, interval):
+    """等待下次检查时间，允许停止或设置变更信号提前唤醒。
+
+    Args:
+        stop_event: 轮询停止事件。
+        settings_changed: 录制设置变更事件。
+        interval: 最长等待时间，单位为秒。
+    """
     tasks = [asyncio.create_task(stop_event.wait()), asyncio.create_task(settings_changed.wait())]
     try:
         await asyncio.wait(tasks, timeout=interval, return_when=asyncio.FIRST_COMPLETED)
     finally:
+        # 超时或任一信号触发后，回收两个等待任务，避免每轮遗留协程。
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def crawler_loop(app, stop_event):
+    """按直播间各自的检查间隔轮询并尝试启动录制。
+
+    Args:
+        app: 提供数据库和录制设置管理器的应用实例。
+        stop_event: 停止事件，触发后结束轮询。
+    """
     logger.info("爬虫协程启动")
     settings_manager = app.state.recording_settings
     last_checks = {}
@@ -39,6 +55,7 @@ async def crawler_loop(app, stop_event):
                 if stop_event.is_set():
                     break
                 options = settings_manager.for_room(room)
+                # 设置版本变化时跳过旧检查间隔的限制，使新调度配置及时生效。
                 revision = (settings_manager.schedule_revision, settings_manager.room_revisions.get(room["id"], 0), options.check_interval_seconds)
                 previous = last_checks.get(room["id"])
                 if previous and previous[1] == revision and monotonic() < previous[0] + options.check_interval_seconds:

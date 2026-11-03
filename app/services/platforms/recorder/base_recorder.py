@@ -1,3 +1,6 @@
+"""提供平台录制器共用的任务控制、FFmpeg 进程管理、健康检测与文件处理逻辑。"""
+
+
 import time
 import json
 import math
@@ -22,6 +25,7 @@ from sqlalchemy import text
 logger = get_logger(__name__)
 
 class BaseRecorder:
+    """封装平台共用录制流程，平台子类负责直播状态和播放流适配。"""
 
     def __init__(self, app, room):
         self.app = app
@@ -37,6 +41,8 @@ class BaseRecorder:
         self._segment_had_data = False
 
     def recording_options(self):
+        """获取并缓存本轮录制使用的房间配置，无管理器时使用默认配置。"""
+        # 每个录制器首次读取后缓存选项，供本轮录制各阶段复用。
         if self._recording_options is None:
             manager = getattr(self.app.state, "recording_settings", None)
             self._recording_options = manager.for_room(self.room) if manager is not None else self.health_options()
@@ -49,6 +55,14 @@ class BaseRecorder:
         return manager.settings if manager is not None else RecordingOptions()
 
     async def spawn_recording_process(self, command):
+        """启动 FFmpeg，并按配置启用进度输出和定时分片。
+
+        Args:
+            command: FFmpeg 命令参数列表，最后一项为输出文件路径。
+
+        Returns:
+            标准输出和标准错误均连接到管道的异步子进程。
+        """
         from app.modules.recording.segments import TimedSegments
 
         self._timed_output = None

@@ -1,3 +1,5 @@
+"""提供全局直播间轮询任务的启动、停止和状态查询接口。"""
+
 
 from fastapi import APIRouter
 from app.modules.recording.crawler import crawler_manager

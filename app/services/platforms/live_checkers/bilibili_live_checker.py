@@ -1,3 +1,5 @@
+"""解析哔哩哔哩直播链接，查询主播、直播间信息和可用播放流。"""
+
 
 import time
 import logging

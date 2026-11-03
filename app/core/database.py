@@ -1,3 +1,5 @@
+"""解析数据库路径、初始化异步会话工厂，并补齐 SQLite 表结构和默认数据。"""
+
 
 from pathlib import Path
 
@@ -13,6 +15,14 @@ AsyncSessionLocal = None
 
 
 def resolve_database_url(db_url: str) -> str:
+    """将 SQLite 相对路径解析到持久化数据目录。
+
+    Args:
+        db_url: SQLAlchemy 数据库连接地址。
+
+    Returns:
+        解析后的连接地址；内存数据库及其他数据库类型保持原值语义。
+    """
     url = make_url(db_url)
     if url.get_backend_name() == "sqlite" and url.database and url.database != ":memory:":
         path = Path(url.database).expanduser()
@@ -23,6 +33,12 @@ def resolve_database_url(db_url: str) -> str:
 
 
 async def init_db(app, db_url: str):
+    """初始化数据库引擎、会话工厂和应用所需的表结构。
+
+    Args:
+        app: 接收数据库引擎和会话工厂的应用实例。
+        db_url: SQLAlchemy 异步数据库连接地址。
+    """
     global engine
     global AsyncSessionLocal
 

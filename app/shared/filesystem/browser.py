@@ -1,3 +1,6 @@
+"""列出可浏览的本地目录，供配置和视频处理页面选择路径。"""
+
+
 import os
 from pathlib import Path, PureWindowsPath
 from string import ascii_uppercase
@@ -8,6 +11,22 @@ from app.modules.settings.service import resolve_save_path
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".ts", ".flv", ".mov", ".avi", ".webm", ".m4v"}
 
 def list_directories(value: str | None, offset: int, limit: int, include_files=False):
+    """分页列出本地目录，可选包含支持的视频文件。
+
+    Args:
+        value: 待浏览路径；为 None 时列出可用盘符或根目录。
+        offset: 分页起始偏移量。
+        limit: 本页最多返回的条目数。
+        include_files: 是否同时列出支持的视频文件。
+
+    Returns:
+        包含当前路径、父目录、分页条目、快捷目录和总数的字典。
+
+    Raises:
+        ValueError: 路径为空、包含控制字符或不符合本机路径要求。
+        FileNotFoundError: 路径不存在或不是目录。
+        OSError: 无法读取目标目录。
+    """
     shortcuts = [
         {"name": "项目目录", "path": str(ROOT_DIR)},
         {"name": "用户目录", "path": str(Path.home())},

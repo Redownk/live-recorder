@@ -1,3 +1,6 @@
+"""提供运行日志、问题查询和诊断接口，并限制诊断功能的访问来源。"""
+
+
 import asyncio
 from datetime import datetime, timezone
 from typing import Annotated, Literal
