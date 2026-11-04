@@ -57,7 +57,6 @@ class DouyinRecorder(BaseRecorder):
             return {
                 "is_live": False,
                 "owner": user_data.get("nickname", ""),
-                "title": user_data.get("nickname", ""),
                 "streams": {}
             }
 
@@ -67,7 +66,6 @@ class DouyinRecorder(BaseRecorder):
             return {
                 "is_live": False,
                 "owner": user_data.get("nickname", ""),
-                "title": room_data.get("title", user_data.get("nickname", "")),
                 "streams": {}
             }
 
@@ -104,7 +102,6 @@ class DouyinRecorder(BaseRecorder):
         return {
             "is_live": data.get("room_status") == 0,
             "owner": user_data.get("nickname", ""),
-            "title": room_data.get("title", user_data.get("nickname", "")),
             "avatar": ((user_data.get("avatar_thumb") or {}).get("url_list") or [""])[0],
             "cover": ((room_data.get("cover") or {}).get("url_list") or [""])[0],
             "streams": streams
@@ -134,13 +131,12 @@ class DouyinRecorder(BaseRecorder):
         async with get_db_session(self.app) as db:
             result = await db.execute(text("""
                 INSERT INTO live_room_log
-                    (live_room_id, platform, owner, title, start_live, create_time, del_flag)
-                VALUES (:live_room_id, :platform, :owner, :title, :start_live, CURRENT_TIMESTAMP, 0)
+                    (live_room_id, platform, owner, start_live, create_time, del_flag)
+                VALUES (:live_room_id, :platform, :owner, :start_live, CURRENT_TIMESTAMP, 0)
             """), {
                 "live_room_id": self.room["id"],
                 "platform": self.platform,
                 "owner": live_info["owner"],
-                "title": live_info["title"],
                 "start_live": start_time
             })
             await db.execute(text("""

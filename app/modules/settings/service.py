@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 
 DEFAULT_FILENAME_TEMPLATE = "{platform}_{owner}_{timestamp}"
-TEMPLATE_FIELDS = {"platform", "owner", "remark", "room_id", "title", "date", "time", "timestamp", "record_id"}
+TEMPLATE_FIELDS = {"platform", "owner", "remark", "room_id", "date", "time", "timestamp", "record_id"}
 INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f\']')
 
 
@@ -98,7 +98,6 @@ def build_filename(template: str, room, live_info, start_time: datetime, record_
         "owner": live_info.get("owner") or room.get("owner") or "unknown",
         "remark": str(room.get("remark") or "").strip() or "未备注",
         "room_id": room["room_id"],
-        "title": live_info.get("title") or "untitled",
         "date": start_time.strftime("%Y%m%d"),
         "time": start_time.strftime("%H%M%S"),
         "timestamp": start_time.strftime("%Y%m%d%H%M%S"),

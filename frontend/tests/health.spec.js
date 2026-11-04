@@ -17,6 +17,7 @@ async function healthApi(page) {
     if (path === '/api/rooms') return route.fulfill({ json: [{ id: 1, platform: 'DOUYIN', room_id: '123', owner: '健康测试主播', monitor_enabled: true }] });
     if (path === '/api/recording-status') return route.fulfill({ json: state.statuses });
     if (path === '/api/settings/disk') return route.fulfill({ json: { enabled: true, disks: [] } });
+    if (path === '/api/settings/platforms') return route.fulfill({ json: { platforms: ['douyin', 'bilibili', 'douyu'].map((platform) => ({ platform, configured: false })) } });
     if (path === '/api/settings') {
       if (req.method() === 'PUT') {
         state.settings = req.postDataJSON();

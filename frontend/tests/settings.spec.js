@@ -49,6 +49,7 @@ async function settingsApi(page, { failLoad = false, failSave = false, failBrows
       settings = request.postDataJSON();
       return route.fulfill({ json: response(settings) });
     }
+    if (path === '/api/settings/platforms') return route.fulfill({ json: { platforms: ['douyin', 'bilibili', 'douyu'].map((platform) => ({ platform, configured: false })) } });
     if (path === '/api/settings') return route.fulfill(failLoad ? { status: 503, json: { detail: '服务暂不可用' } } : { json: response(settings) });
     return route.fulfill({ json: [] });
   });

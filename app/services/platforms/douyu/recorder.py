@@ -38,7 +38,6 @@ class DouyuRecorder(BaseRecorder):
         return {
             "is_live": True,
             "owner": room_info.get("nickname", ""),
-            "title": room_info.get("room_name", "")
         }
 
     async def record(self, live_info):
@@ -50,13 +49,12 @@ class DouyuRecorder(BaseRecorder):
         async with get_db_session(self.app) as db:
             result = await db.execute(text("""
                 INSERT INTO live_room_log
-                    (live_room_id, platform, owner, title, start_live, create_time, del_flag)
-                VALUES (:live_room_id, :platform, :owner, :title, :start_live, CURRENT_TIMESTAMP, 0)
+                    (live_room_id, platform, owner, start_live, create_time, del_flag)
+                VALUES (:live_room_id, :platform, :owner, :start_live, CURRENT_TIMESTAMP, 0)
             """), {
                 "live_room_id": self.room["id"],
                 "platform": self.platform,
                 "owner": live_info["owner"],
-                "title": live_info["title"],
                 "start_live": start_time
             })
             await db.execute(text("""

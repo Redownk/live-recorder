@@ -16,12 +16,13 @@ CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.shee
 MAX_FILE_BYTES = 5 * 1024 * 1024
 COLUMNS = (
     ("platform", "平台", 16), ("room_id", "房间号", 26), ("owner", "主播", 22),
-    ("remark", "备注", 36), ("room_url", "直播间链接", 44), ("title", "标题", 36),
+    ("remark", "备注", 36), ("room_url", "直播间链接", 44),
     ("monitor_enabled", "监控开关", 14), ("sec_uid", "用户标识", 30),
     ("avatar", "头像链接", 36), ("cover", "封面链接", 36),
 )
 PLATFORMS = {"DOUYIN": "抖音", "BILIBILI": "哔哩哔哩", "DOUYU": "斗鱼"}
 PLATFORM_CODES = {label: code for code, label in PLATFORMS.items()}
+FIELD_COLUMNS = {field: get_column_letter(index) for index, (field, _, _) in enumerate(COLUMNS, 1)}
 
 
 def create_workbook(rooms):
@@ -41,8 +42,8 @@ def create_workbook(rooms):
     for index, (_, _, width) in enumerate(COLUMNS, 1):
         sheet.column_dimensions[get_column_letter(index)].width = width
     # 列默认格式也设为文本，便于在导出文件的空白行中继续填写编号。
-    for column in ("B", "H"):
-        sheet.column_dimensions[column].number_format = "@"
+    for field in ("room_id", "sec_uid"):
+        sheet.column_dimensions[FIELD_COLUMNS[field]].number_format = "@"
     for cell in sheet[1]:
         cell.font = Font(name="微软雅黑", bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="22766A")
@@ -65,8 +66,9 @@ def create_workbook(rooms):
             cell.number_format = "@"
             cell.font = Font(name="微软雅黑", size=11)
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-    sheet.auto_filter.ref = f"A1:J{sheet.max_row}"
-    for column, options in (("A", "抖音,哔哩哔哩,斗鱼"), ("G", "启用,暂停")):
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}{sheet.max_row}"
+    for field, options in (("platform", "抖音,哔哩哔哩,斗鱼"), ("monitor_enabled", "启用,暂停")):
+        column = FIELD_COLUMNS[field]
         validation = DataValidation(type="list", formula1=f'"{options}"', allow_blank=True)
         validation.errorTitle, validation.error = "填写内容不正确", "请选择下拉列表中的值"
         validation.showErrorMessage = True

@@ -34,7 +34,6 @@ class BilibiliRecorder(BaseRecorder):
         return {
             "is_live": info["data"]["room_info"]["live_status"]==1,
             "owner": info["data"]["anchor_info"]["base_info"]["uname"],
-            "title": info["data"]["room_info"]["title"],
         }
 
 
@@ -47,13 +46,12 @@ class BilibiliRecorder(BaseRecorder):
         async with get_db_session(self.app) as db:
             result = await db.execute(text("""
                 INSERT INTO live_room_log
-                    (live_room_id, platform, owner, title, start_live, create_time, del_flag)
-                VALUES (:room_id, :platform, :owner, :title, :start_live, CURRENT_TIMESTAMP, 0)
+                    (live_room_id, platform, owner, start_live, create_time, del_flag)
+                VALUES (:room_id, :platform, :owner, :start_live, CURRENT_TIMESTAMP, 0)
             """),{
                 "room_id": self.room["id"],
                 "platform": self.platform,
                 "owner": live_info["owner"],
-                "title": live_info["title"],
                 "start_live": start_time
             })
             await db.execute(text("""

@@ -10,9 +10,11 @@ from fastapi.responses import JSONResponse
 from app.modules.settings.service import RecordingOptions, build_filename, resolve_save_path
 from app.shared.filesystem.browser import list_directories
 from app.shared.filesystem.access import check_directory_access
+from app.modules.settings.platform_api import router as platform_router
 
 
 router = APIRouter(prefix="/api/settings", tags=["录制设置"])
+router.include_router(platform_router)
 
 
 @router.get("/disk")
@@ -48,7 +50,7 @@ def settings_response(options: RecordingOptions):
         filename_example=build_filename(
             options.filename_template,
             {"platform": "DOUYIN", "room_id": "123456", "owner": "示例主播", "remark": "示例备注"},
-            {"owner": "示例主播", "title": "直播标题"},
+            {"owner": "示例主播"},
             datetime(2026, 1, 1, 12, 0, 0),
             "a1b2c3d4" * 4,
         ) + ".ts",

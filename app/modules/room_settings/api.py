@@ -25,7 +25,7 @@ def response_for(room, overrides, manager):
     return {"room_id": room.id, "overrides": overrides.model_dump(), "effective": effective.model_dump(),
             "global_settings": manager.settings.model_dump(), "customized": bool(overrides.model_dump(exclude_none=True)),
             "resolved_save_path": str(resolve_save_path(effective.save_path)),
-            "filename_example": build_filename(effective.filename_template, fields, {"owner": room.owner, "title": room.title}, datetime(2026, 1, 1, 12), "a1b2c3d4" * 4) + ".ts"}
+            "filename_example": build_filename(effective.filename_template, fields, {"owner": room.owner}, datetime(2026, 1, 1, 12), "a1b2c3d4" * 4) + ".ts"}
 
 
 @router.get("/{room_id}/recording-settings")

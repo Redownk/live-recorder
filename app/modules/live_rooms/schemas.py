@@ -15,26 +15,28 @@ class LiveRoomBase(BaseModel):
     sec_uid: str | None = None
     owner: str | None = None
     remark: str | None = Field(default=None, max_length=512)
-    title: str | None = None
     avatar: str | None = None
     cover: str | None = None
     monitor_enabled: bool = True
 
 
 class LiveRoomCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     room_url: str
     remark: str | None = Field(default=None, max_length=512)
     monitor_enabled: bool = True
 
 
 class LiveRoomUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     platform: str | None = None
     room_id: str | None = None
     room_url: str | None = None
     sec_uid: str | None = None
     owner: str | None = None
     remark: str | None = Field(default=None, max_length=512)
-    title: str | None = None
     avatar: str | None = None
     cover: str | None = None
     monitor_enabled: bool | None = None
@@ -69,7 +71,6 @@ class RoomBackupEntry(BaseModel):
     sec_uid: str | None = Field(default=None, max_length=255)
     owner: str | None = Field(default=None, max_length=255)
     remark: str | None = Field(default=None, max_length=512)
-    title: str | None = Field(default=None, max_length=512)
     avatar: str | None = Field(default=None, max_length=1024)
     cover: str | None = Field(default=None, max_length=1024)
     monitor_enabled: bool = Field(default=False, strict=True)

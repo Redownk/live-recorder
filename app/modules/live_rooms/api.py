@@ -43,7 +43,6 @@ async def list_rooms(keyword: str | None = Query(default=None), db: AsyncSession
                 LiveRoom.room_id.like(like),
                 LiveRoom.owner.like(like),
                 LiveRoom.remark.like(like),
-                LiveRoom.title.like(like),
                 LiveRoom.platform.like(like),
             )
         )
@@ -88,7 +87,6 @@ async def create_room(payload: LiveRoomCreate, request: Request, db: AsyncSessio
         sec_uid=str(info.get("secUid") or "") or None,
         owner=info.get("owner"),
         remark=(payload.remark or "").strip() or info.get("owner"),
-        title=info.get("roomTitle") or info.get("title") or info.get("owner"),
         avatar=info.get("avatar"),
         cover=info.get("cover"),
         monitor_enabled=payload.monitor_enabled,

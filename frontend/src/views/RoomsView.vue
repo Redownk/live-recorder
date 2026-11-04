@@ -119,7 +119,7 @@ function openModal(type, room = null) {
   formError.value = '';
   disableMonitor.value = true;
   draft.value = type === 'edit'
-    ? { owner: room.owner || '', title: room.title || '', remark: room.remark || '', monitor_enabled: room.monitor_enabled }
+    ? { owner: room.owner || '', remark: room.remark || '', monitor_enabled: room.monitor_enabled }
     : { room_url: '', remark: '', monitor_enabled: true };
   modal.value = type;
 }
@@ -178,7 +178,7 @@ async function roomAction(room, action, event) {
   try {
     if (action === 'check') {
       const result = await api.liveStatus(room.id);
-      notify(result.is_live ? `正在直播：${result.title || result.owner || ''}` : '当前未开播');
+      notify(result.is_live ? `正在直播：${result.owner || ''}` : '当前未开播');
     } else {
       const updated = await api.monitor(room.id, !room.monitor_enabled);
       Object.assign(room, updated);
@@ -234,7 +234,7 @@ loadRecordingStatus();
     <div class="view-toolbar">
       <div class="room-list-filters">
         <form class="search-form" role="search" @submit.prevent="loadRooms">
-          <Search :size="17" /><input v-model="keyword" type="search" aria-label="搜索直播间" placeholder="搜索房间、主播、备注、标题" />
+          <Search :size="17" /><input v-model="keyword" type="search" aria-label="搜索直播间" placeholder="搜索房间、主播、备注" />
           <button type="submit" class="icon-button" title="搜索" aria-label="搜索"><Search :size="17" /></button>
         </form>
         <select v-model="recordingFilter" aria-label="筛选录制状态">
@@ -253,7 +253,7 @@ loadRecordingStatus();
     <DiskStatus compact />
     <div class="table-wrap" :aria-busy="loading">
       <table>
-        <thead><tr><th>平台</th><th>主播 / 房间号</th><th>备注</th><th>标题</th><th>监控</th><th>录制状态</th><th>录制健康</th><th>录制时长</th><th>最近开播</th><th class="actions-head">操作</th></tr></thead>
+        <thead><tr><th>平台</th><th>主播 / 房间号</th><th>备注</th><th>监控</th><th>录制状态</th><th>录制健康</th><th>录制时长</th><th>最近开播</th><th class="actions-head">操作</th></tr></thead>
         <tbody>
           <tr v-for="room in visibleRooms" :key="room.id">
             <td><span class="platform-badge" :class="room.platform.toLowerCase()">{{ platformName(room.platform) }}</span></td>
@@ -269,7 +269,6 @@ loadRecordingStatus();
               </template>
               <div v-else class="remark-display"><span>{{ room.remark || '-' }}</span><button class="icon-button" title="编辑备注" :aria-label="`编辑备注 ${room.owner || room.room_id}`" :disabled="remarkSaving" @click="editRemark(room)"><Pencil :size="15" /></button></div>
             </td>
-            <td class="title-cell">{{ room.title || '-' }}</td>
             <td><input type="checkbox" role="switch" :aria-label="`监控 ${room.owner || room.room_id}`" :checked="room.monitor_enabled" :disabled="rowBusy.includes(room.id)" @change="roomAction(room, 'monitor', $event)" /></td>
             <td class="recording-state-cell"><span class="recording-state" :title="statuses[room.id]?.message" :class="{ recording: !statusError && statuses[room.id]?.state === 'recording', reconnecting: !statusError && statuses[room.id]?.state === 'reconnecting', 'error-text': statuses[room.id]?.state === 'disk_blocked' }">{{ recordingLabel(room) }}</span></td>
             <td class="recording-health-cell" :title="statuses[room.id]?.health?.last_error || statuses[room.id]?.message">
@@ -289,7 +288,7 @@ loadRecordingStatus();
               <button class="icon-button danger" title="删除直播间" :aria-label="`删除 ${room.owner || room.room_id}`" :disabled="remarkSaving" @click="openModal('delete', room)"><Trash2 :size="17" /></button>
             </div></td>
           </tr>
-          <tr v-if="!visibleRooms.length"><td colspan="10" class="empty-state">{{ emptyMessage }}</td></tr>
+          <tr v-if="!visibleRooms.length"><td colspan="9" class="empty-state">{{ emptyMessage }}</td></tr>
         </tbody>
       </table>
     </div>
@@ -301,7 +300,6 @@ loadRecordingStatus();
         <label v-if="modal === 'add'" class="field">直播间 URL<input v-model="draft.room_url" type="url" required autofocus placeholder="https://live.douyin.com/…" :disabled="saving" /></label>
         <template v-else>
           <label class="field">主播昵称<input v-model="draft.owner" maxlength="255" :disabled="saving" /></label>
-          <label class="field">标题<input v-model="draft.title" maxlength="512" :disabled="saving" /></label>
         </template>
         <label class="field">备注<input v-model="draft.remark" maxlength="512" :disabled="saving" /></label>
         <label class="checkbox-label"><input v-model="draft.monitor_enabled" type="checkbox" :disabled="saving" />启用监控</label>

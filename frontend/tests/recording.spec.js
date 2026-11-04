@@ -12,7 +12,7 @@ async function recordingApi(page) {
       control.calls += 1;
       return route.fulfill(control.fail ? { status: 503, json: { detail: '状态服务暂不可用' } } : { json: control.statuses });
     }
-    if (path === '/api/rooms/1/live-status') return route.fulfill({ json: { is_live: true, title: '当前直播标题' } });
+    if (path === '/api/rooms/1/live-status') return route.fulfill({ json: { is_live: true, owner: '录制主播' } });
     return route.fulfill({ json: [] });
   });
   return control;
@@ -26,7 +26,7 @@ test('recording state and duration update automatically through reconnect and en
   await expect(page.getByRole('columnheader', { name: '录制时长', exact: true })).toBeVisible();
   await expect(page.locator('.recording-state').getByText('未录制', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '检查 录制主播', exact: true }).click();
-  await expect(page.getByText('正在直播：当前直播标题', { exact: true })).toBeVisible();
+  await expect(page.getByText('正在直播：录制主播', { exact: true })).toBeVisible();
   await expect(page.locator('.recording-state').getByText('录制中', { exact: true })).toHaveCount(0);
 
   control.statuses = { 1: { state: 'recording', elapsed_seconds: 125, started_at: '2000-01-01T00:00:00Z', log_id: 10 } };

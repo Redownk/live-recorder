@@ -20,6 +20,7 @@ async function setup(page) {
       return route.fulfill({ json: { enabled: state.settings.disk_protection_enabled, disks: [state.disk] } });
     }
     if (path === '/api/settings/preview') return route.fulfill({ json: settingsResponse() });
+    if (path === '/api/settings/platforms') return route.fulfill({ json: { platforms: ['douyin', 'bilibili', 'douyu'].map((platform) => ({ platform, configured: false })) } });
     if (path === '/api/settings') {
       if (req.method() === 'PUT') {
         state.settings = req.postDataJSON();

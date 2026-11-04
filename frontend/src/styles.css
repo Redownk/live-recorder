@@ -46,13 +46,19 @@ h1 { font-size: 24px; margin: 0; font-weight: 650; }
 .room-import-body { overflow-wrap: anywhere; }
 .import-pagination { justify-content: flex-end; flex-wrap: wrap; font-size: 13px; }
 .import-summary { font-size: 14px; }
+.platform-cookies { margin-top: 32px; }
+.platform-cookies > p { font-size: 13px; }
+.platform-cookie-row { display: grid; gap: 10px; margin-top: 20px; min-width: 0; }
+.platform-cookie-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
+.platform-cookie-input { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.platform-cookie-input input { flex: 1; min-width: 0; }
+.platform-cookie-actions { display: flex; gap: 8px; }
 .table-wrap { width: 100%; overflow-x: auto; border-top: 1px solid #e0e4e9; background: #fff; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { padding: 14px 16px; border-bottom: 1px solid #e8ebef; text-align: left; }
 th { white-space: nowrap; font-weight: 500; color: #6b7380; background: #f9fafb; }
 td { line-height: 1.5; }
 tbody tr:hover { background: #fcfcfd; }
-.title-cell { min-width: 160px; max-width: 360px; overflow-wrap: anywhere; }
 .remark-cell { min-width: 230px; max-width: 320px; overflow-wrap: anywhere; }
 .remark-display { display: flex; align-items: center; gap: 8px; }
 .remark-display > span { flex: 1; min-width: 0; }

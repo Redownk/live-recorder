@@ -38,6 +38,7 @@ async function setup(page, { failLoad = false, failSave = false, denyBrowse = fa
       const current = url.searchParams.get('path') || 'E:/global';
       return route.fulfill({ json: { path: current, parent: current === 'E:/global' ? 'E:/' : 'E:/global', directories: current === 'E:/global' ? [{ name: '独立录制', path: 'E:/global/独立录制' }] : [], shortcuts: [], offset: 0, limit: 200, total: 1, has_more: false } });
     }
+    if (path === '/api/settings/platforms') return route.fulfill({ json: { platforms: ['douyin', 'bilibili', 'douyu'].map((platform) => ({ platform, configured: false })) } });
     if (path === '/api/settings') {
       if (req.method() === 'PUT') { state.global = req.postDataJSON(); state.globalWrites.push(state.global); }
       return route.fulfill({ json: { ...state.global, resolved_save_path: state.global.save_path, filename_example: '独立主播_20261028120000.ts' } });

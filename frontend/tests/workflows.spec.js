@@ -59,7 +59,7 @@ test('room workflow and crawler controls', async ({ page }, testInfo) => {
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/');
   await expect(page).toHaveURL(/\/rooms$/);
-  await expect(page.getByText('<b>直播标题</b>', { exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: '标题', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '添加直播间', exact: true }).click();
   await page.getByRole('textbox', { name: '直播间 URL' }).fill('https://live.douyin.com/67890');
   await page.getByRole('textbox', { name: '备注', exact: true }).fill('新备注');
@@ -69,7 +69,7 @@ test('room workflow and crawler controls', async ({ page }, testInfo) => {
   await expect(page.getByText('新主播', { exact: true })).toBeVisible();
   expect(requests.find((item) => item.method === 'POST' && item.path === '/api/rooms').body).toEqual({ room_url: 'https://live.douyin.com/67890', remark: '新备注', monitor_enabled: true });
   await page.getByRole('button', { name: '检查 新主播', exact: true }).click();
-  await expect(page.getByText('正在直播：正在直播', { exact: true })).toBeVisible();
+  await expect(page.getByText('正在直播：新主播', { exact: true })).toBeVisible();
   await expect(page.locator('.recording-state').getByText('录制中', { exact: true })).toHaveCount(0);
   await page.getByRole('switch', { name: '监控 新主播' }).uncheck();
   await expect(page.getByRole('switch', { name: '监控 新主播' })).not.toBeChecked();
@@ -172,7 +172,7 @@ test('log and video filters survive reload', async ({ page }, testInfo) => {
   await page.goto('/rooms');
   await page.getByRole('link', { name: '日志 测试主播', exact: true }).click();
   await expect(page).toHaveURL(/\/logs\?room_id=1$/);
-  await expect(page.getByText('录制标题', { exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: '标题', exact: true })).toHaveCount(0);
   expect(requests.find((item) => item.path === '/api/logs').query.room_id).toBe('1');
   await page.getByRole('link', { name: '查看日志 7 的视频' }).click();
   await expect(page).toHaveURL(/\/videos\?log_id=7$/);

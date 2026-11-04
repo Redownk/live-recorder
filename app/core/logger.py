@@ -17,7 +17,9 @@ _secrets = set()
 
 def refresh_secrets():
     global _secrets
-    _secrets = configured_secrets(local_config) | set(_secrets)
+    _secrets.update(configured_secrets(local_config))
+    if _store is not None:
+        _store.secrets = _secrets
     return _secrets
 
 

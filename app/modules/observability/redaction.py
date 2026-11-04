@@ -13,7 +13,7 @@ _values = re.compile(r"(?i)([\"']?(?:password|passwd|token|access_token|refresh_
 def configured_secrets(config):
     secrets = set()
     if isinstance(config, dict):
-        for key, value in config.items():
+        for key, value in list(config.items()):
             key = str(key)
             if any(part in key.lower() for part in ("cookie", "password", "token", "secret", "api_key")) and isinstance(value, str) and len(value) >= 4:
                 secrets.add(value)

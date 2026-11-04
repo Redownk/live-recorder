@@ -4,18 +4,19 @@ import { FolderOpen, RefreshCw, RotateCcw, Save } from '@lucide/vue';
 import { api } from '../api.js';
 import DirectoryPicker from '../components/DirectoryPicker.vue';
 import DiskStatus from '../components/DiskStatus.vue';
+import PlatformCookies from '../components/PlatformCookies.vue';
 import { recordingQualities } from '../recordingOptions.js';
 
 const notify = inject('notify');
 const presets = [
   { label: '平台 / 主播 / 时间', value: '{platform}_{owner}_{timestamp}' },
   { label: '主播 / 日期 / 时间', value: '{owner}_{date}_{time}' },
-  { label: '平台 / 房间号 / 标题 / 时间', value: '{platform}_{room_id}_{title}_{timestamp}' },
+  { label: '平台 / 房间号 / 备注 / 时间', value: '{platform}_{room_id}_{remark}_{timestamp}' },
   { label: '按主播分目录', value: '{owner}/{timestamp}' },
   { label: '按备注分目录', value: '{remark}/{owner}_{timestamp}' },
 ];
 const tokens = [
-  ['platform', '平台'], ['owner', '主播'], ['remark', '备注'], ['room_id', '房间号'], ['title', '标题'],
+  ['platform', '平台'], ['owner', '主播'], ['remark', '备注'], ['room_id', '房间号'],
   ['date', '日期'], ['time', '时间'], ['timestamp', '日期时间'], ['record_id', '唯一编号'],
 ];
 const diskStatus = ref(null);
@@ -151,6 +152,7 @@ load();
       <p v-if="saveError" class="error-banner" role="alert">{{ saveError }}</p>
       <footer class="settings-actions"><span class="muted">{{ dirty ? '有未保存的修改' : '已保存' }}</span><button type="button" :disabled="!dirty || saving" @click="resetDraft"><RotateCcw :size="16" />还原修改</button><button type="submit" class="primary" :disabled="!dirty || saving || previewBusy || !!previewError"><Save :size="16" />{{ saving ? '保存中…' : '保存设置' }}</button></footer>
     </form>
+    <PlatformCookies />
     <DirectoryPicker v-if="directoryPickerOpen" :initial-path="draft.save_path" @select="selectDirectory" @close="closeDirectoryPicker" />
   </section>
 </template>

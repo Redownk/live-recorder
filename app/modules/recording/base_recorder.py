@@ -174,7 +174,7 @@ class BaseRecorder:
                 manager.notices.pop(key, None)
                 return {"status": "offline"}
             await guard.ensure_can_start(directory)
-            logger.info(self._log_message("检测到开播，准备录制: %s"), live_info.get("title") or live_info.get("owner"))
+            logger.info(self._log_message("检测到开播，准备录制: %s"), live_info.get("owner"))
             started = manager.start_recording(key, lambda: self.record(live_info), self.finish_recording_task,
                                               token=token, manual=manual)
             return {"status": "started" if started else "stopped"}

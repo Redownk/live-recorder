@@ -2,6 +2,7 @@
 
 
 from pathlib import Path
+import asyncio
 
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from app.models import Base
 from app.core.paths import ROOT_DIR
+from app.core.migrations import backup_before_title_removal, remove_title_columns
 
 engine = None
 AsyncSessionLocal = None
@@ -46,6 +48,7 @@ async def init_db(app, db_url: str):
     url = make_url(db_url)
     if url.get_backend_name() == "sqlite" and url.database and url.database != ":memory:":
         Path(url.database).parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(backup_before_title_removal, Path(url.database))
 
     engine = create_async_engine(
         db_url,
@@ -62,6 +65,9 @@ async def init_db(app, db_url: str):
     app.state.db = AsyncSessionLocal
 
     async with engine.begin() as conn:
+        if url.get_backend_name() == "sqlite":
+            # 显式开启事务，使结构变更和数据迁移可以一起回滚。
+            await conn.execute(text("BEGIN IMMEDIATE"))
         await conn.run_sync(Base.metadata.create_all)
         if db_url.startswith("sqlite"):
             settings_columns = await conn.execute(text("PRAGMA table_info(recording_settings)"))
@@ -94,6 +100,7 @@ async def init_db(app, db_url: str):
                 await conn.execute(text("ALTER TABLE live_room_log ADD COLUMN health_restart_count INTEGER NOT NULL DEFAULT 0"))
             if "health_last_error" not in log_names:
                 await conn.execute(text("ALTER TABLE live_room_log ADD COLUMN health_last_error TEXT"))
+            await remove_title_columns(conn)
 
 
 async def _ensure_sqlite_defaults(conn):
@@ -128,10 +135,10 @@ async def _ensure_sqlite_defaults(conn):
     health_error = "health_last_error" if any(column["name"] == "health_last_error" for column in columns) else "NULL"
     await conn.execute(text(f"""
         INSERT INTO live_room_log
-            (id, live_room_id, platform, owner, title, start_live, end_live,
+            (id, live_room_id, platform, owner, start_live, end_live,
              live_time, user_num, total_user, create_time, del_flag, interrupted, health_restart_count, health_last_error)
         SELECT
-            id, live_room_id, platform, owner, title, start_live, end_live,
+            id, live_room_id, platform, owner, start_live, end_live,
             live_time, user_num, total_user, COALESCE(create_time, CURRENT_TIMESTAMP), del_flag, {interrupted_value}, {health_count}, {health_error}
         FROM live_room_log_old
     """))
