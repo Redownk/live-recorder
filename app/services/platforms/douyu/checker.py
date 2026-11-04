@@ -12,7 +12,7 @@ import httpx
 from requests.utils import DEFAULT_ACCEPT_ENCODING
 
 from app.core.config import local_config
-from app.services.platforms.common.http import client
+from app.services.platforms.common.http import get_client
 from app.services.platforms.common.user_agent import random_user_agent
 from app.services.platforms.common.parsing import match1, json_loads
 
@@ -99,7 +99,7 @@ class DouyuLiveChecker:
     @staticmethod
     async def get_room_info(room_id: str) -> dict:
         headers = DouyuLiveChecker.build_fake_headers()
-        resp = await client.get(
+        resp = await get_client().get(
             f"https://{DOUYU_WEB_DOMAIN}/betard/{room_id}",
             headers=headers,
         )
@@ -109,7 +109,7 @@ class DouyuLiveChecker:
     @staticmethod
     async def get_real_rid(url: str) -> str:
         rid = url.split("douyu.com/")[1].split("/")[0].split("?")[0] or match1(url, r"douyu.com/(\d+)")
-        resp = await client.get(
+        resp = await get_client().get(
             f"https://{DOUYU_MOBILE_DOMAIN}/{rid}",
             headers={"User-Agent": random_user_agent("mobile")},
         )
@@ -126,7 +126,7 @@ class DouyuLiveChecker:
         ctx = jsengine.jsengine()
         h5enc_url = f"https://{DOUYU_WEB_DOMAIN}/swf_api/homeH5Enc?rids={rid}"
         js_enc = (
-            await client.get(h5enc_url, headers=headers)
+            await get_client().get(h5enc_url, headers=headers)
         ).json()["data"][f"room{rid}"]
         js_enc = js_enc.replace("return eval", "return [strc, vdwdae325w_64we];")
 
@@ -176,7 +176,7 @@ class DouyuLiveChecker:
                     sign = await DouyuLiveChecker.aclac_sign(room_id, headers)
                     payload = {**req_query, **sign}
                     url = f"https://{DOUYU_PLAY_DOMAIN}/lapi/live/getH5Play/{room_id}"
-                    rsp = await client.get(url, headers=headers, params=payload)
+                    rsp = await get_client().get(url, headers=headers, params=payload)
                 else:
                     sign = await DouyuUtils.sign(
                         sign_type="stream",
@@ -192,7 +192,7 @@ class DouyuLiveChecker:
                         "auth": sign["auth"],
                     }
                     url = f"https://{DOUYU_WEB_DOMAIN}/lapi/live/getH5PlayV1/{room_id}"
-                    rsp = await client.post(
+                    rsp = await get_client().post(
                         url,
                         headers={**headers, "user-agent": DouyuUtils.UserAgent or headers["user-agent"]},
                         data=payload,
@@ -292,7 +292,7 @@ class DouyuUtils:
 
         try:
             DouyuUtils.UserAgent = random_user_agent()
-            rsp = await client.get(
+            rsp = await get_client().get(
                 f"https://{domain}/wgapi/livenc/liveweb/websec/getEncryption",
                 params={"did": did},
                 headers={"User-Agent": DouyuUtils.UserAgent},

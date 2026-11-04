@@ -5,7 +5,7 @@ import time
 import logging
 from requests.utils import DEFAULT_ACCEPT_ENCODING
 from app.core.config import local_config
-from app.services.platforms.common.http import client
+from app.services.platforms.common.http import get_client
 from app.services.platforms.common.user_agent import random_user_agent
 from app.services.platforms.common.parsing import match1
 from app.services.platforms.bilibili.signing import wbi
@@ -42,7 +42,7 @@ class BiliLiveChecker:
             包含平台、房间和主播字段的查询结果；平台返回错误时标记为 error。
         """
         if "b23.tv" in url:
-            response = await client.get(url, follow_redirects=False)
+            response = await get_client().get(url, follow_redirects=False)
             if response.is_error:
                 response.raise_for_status()
             if response.next_request is None:
@@ -76,7 +76,7 @@ class BiliLiveChecker:
             await BiliLiveChecker.update_wbi_context(headers)
         params = {"room_id": room_id, "web_location": BiliUtils.WBI_WEB_LOCATION}
         wbi.sign(params)
-        resp = await client.get(f"{BiliUtils.OFFICIAL_API}/xlive/web-room/v1/index/getInfoByRoom",
+        resp = await get_client().get(f"{BiliUtils.OFFICIAL_API}/xlive/web-room/v1/index/getInfoByRoom",
                                 params=params, headers=headers)
         data = resp.json()
         return data
@@ -99,7 +99,7 @@ class BiliLiveChecker:
             await BiliLiveChecker.update_wbi_context(headers)
         wbi.sign(params)
         url = f"{BiliUtils.OFFICIAL_API}/xlive/web-room/v2/index/getRoomPlayInfo"
-        resp = await client.get(url, params=params, headers=headers)
+        resp = await get_client().get(url, params=params, headers=headers)
         return resp.json().get('data')
 
     @staticmethod
@@ -145,7 +145,7 @@ class BiliLiveChecker:
     @staticmethod
     async def update_wbi_context(headers: dict):
         """辅助方法：更新 WBI 密钥"""
-        resp = await client.get('https://api.bilibili.com/x/web-interface/nav', headers=headers)
+        resp = await get_client().get('https://api.bilibili.com/x/web-interface/nav', headers=headers)
         data = resp.json().get('data', {})
         wbi_img = data.get('wbi_img', {})
         img_url = wbi_img.get('img_url')
@@ -173,7 +173,7 @@ class BiliLiveChecker:
             await BiliLiveChecker.update_wbi_context(headers)
         wbi.sign(params)
         url = f"{BiliUtils.OFFICIAL_API}/xlive/general-interface/v1/rank/queryContributionRank"
-        resp = await client.get(url, params=params, headers=headers)
+        resp = await get_client().get(url, params=params, headers=headers)
         return resp.json().get('data')
 
 class BiliUtils:

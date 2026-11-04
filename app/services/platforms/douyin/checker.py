@@ -15,7 +15,7 @@ from app.services.platforms.common.parsing import match1, json_loads
 import requests
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from app.services.platforms.douyin.signing import ABogus
-from app.services.platforms.common.http import client
+from app.services.platforms.common.http import get_client
 
 class DouyinLiveChecker:
     fake_headers = {
@@ -52,7 +52,7 @@ class DouyinLiveChecker:
         """
         从抖音用户页提取 uniqueId（抖音号）。
         """
-        response = await client.get(url, headers=headers)
+        response = await get_client().get(url, headers=headers)
         match = re.search(r'\\"uniqueId\\":\\"(.*?)\\"', response.text)
         if match and match.group(1):
             return match.group(1)
@@ -72,7 +72,7 @@ class DouyinLiveChecker:
 
         if 'v.douyin' in url:
             try:
-                resp = await client.get(url, headers=fake_headers, follow_redirects=False)
+                resp = await get_client().get(url, headers=fake_headers, follow_redirects=False)
             except Exception:
                 return False
             try:
@@ -164,7 +164,7 @@ class DouyinLiveChecker:
         }
         target_url = DouyinUtils.build_request_url(f"https://live.douyin.com/webcast/room/web/enter/", query)
         logger.debug(f" get_web_room_info {target_url}")
-        web_info = await client.get(target_url, headers=fake_headers)
+        web_info = await get_client().get(target_url, headers=fake_headers)
         web_info = json_loads(web_info.text)
         logger.debug(f" get_web_room_info {web_info}")
         return web_info
@@ -184,7 +184,7 @@ class DouyinLiveChecker:
         }
         abogus = ABogus(user_agent=DouyinUtils.DOUYIN_USER_AGENT)
         query_str, _, _, _ = abogus.generate_abogus(params=urlencode(query, doseq=True), body="")
-        info = await client.get(
+        info = await get_client().get(
             f"https://webcast.amemv.com/webcast/room/reflow/info/?{query_str}",
             headers=await asyncio.to_thread(DouyinLiveChecker.build_fake_headers)
         )

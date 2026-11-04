@@ -23,10 +23,11 @@ from app.core.instance_lock import InstanceLock
 from app.modules.recording.crawler import crawler_manager
 from app.modules.settings.service import init_recording_settings
 from app.modules.recording.status import RecordingStatusTracker
-from app.modules.recording.tasks import RecordingTaskManager, get_recording_tasks
+from app.modules.recording.tasks import RecordingTaskManager
 from app.modules.recording.recovery import recover_interrupted_recordings
 from app.modules.recording.disk import get_disk_guard
 from app.modules.video_processing.service import VideoProcessingManager
+from app.services.platforms.common import http as platform_http
 
 
 setup_logging()
@@ -56,6 +57,29 @@ app.include_router(observability.router)
 app.include_router(room_settings.router)
 
 
+async def _stop_background_tasks():
+    """依次停止已创建的后台任务，确保平台请求结束后才能关闭 HTTP 客户端。"""
+    tasks = getattr(app.state, "recording_tasks", None)
+    if tasks is not None:
+        tasks.closing = True
+    try:
+        guard = getattr(app.state, "recording_disk_guard", None)
+        if guard is not None:
+            await guard.shutdown()
+    finally:
+        try:
+            if crawler_manager.app is app:
+                await crawler_manager.shutdown()
+        finally:
+            try:
+                if tasks is not None:
+                    await tasks.shutdown()
+            finally:
+                processing = getattr(app.state, "video_processing", None)
+                if processing is not None:
+                    await processing.shutdown()
+
+
 @app.on_event("startup")
 async def startup_event():
     db_url = resolve_database_url(local_config.get("database", {}).get("url", "sqlite+aiosqlite:///./data/live_recorder.db"))
@@ -65,6 +89,7 @@ async def startup_event():
     try:
         app.state.runtime_logs = start_runtime_logging()
         logger.info("服务启动中...")
+        platform_http.start_client()
         await init_db(app, db_url)
         await init_recording_settings(app)
         app.state.recording_status = RecordingStatusTracker()
@@ -78,15 +103,18 @@ async def startup_event():
     except BaseException:
         logger.exception("服务启动失败")
         try:
-            await get_disk_guard(app).shutdown()
+            await _stop_background_tasks()
         finally:
             try:
-                engine = getattr(app.state, "engine", None)
-                if engine is not None:
-                    await engine.dispose()
+                await platform_http.close_client()
             finally:
-                instance_lock.release()
-                await asyncio.to_thread(stop_runtime_logging)
+                try:
+                    engine = getattr(app.state, "engine", None)
+                    if engine is not None:
+                        await engine.dispose()
+                finally:
+                    instance_lock.release()
+                    await asyncio.to_thread(stop_runtime_logging)
         raise
 
     logger.info("服务启动完成")
@@ -95,36 +123,28 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("服务关闭中...")
-    tasks = get_recording_tasks(app)
-    tasks.closing = True
     try:
-        try:
-            await get_disk_guard(app).shutdown()
-        finally:
-            try:
-                await crawler_manager.shutdown()
-            finally:
-                try:
-                    await tasks.shutdown()
-                finally:
-                    await app.state.video_processing.shutdown()
+        await _stop_background_tasks()
         await recover_interrupted_recordings(app)
     except BaseException:
         logger.exception("服务关闭时发生异常")
         raise
     finally:
         try:
-            engine = getattr(app.state, "engine", None)
-            if engine is not None:
-                await engine.dispose()
+            await platform_http.close_client()
         finally:
-            instance_lock = getattr(app.state, "instance_lock", None)
             try:
-                if instance_lock is not None:
-                    instance_lock.release()
+                engine = getattr(app.state, "engine", None)
+                if engine is not None:
+                    await engine.dispose()
             finally:
-                logger.info("服务关闭清理结束")
-                await asyncio.to_thread(stop_runtime_logging)
+                instance_lock = getattr(app.state, "instance_lock", None)
+                try:
+                    if instance_lock is not None:
+                        instance_lock.release()
+                finally:
+                    logger.info("服务关闭清理结束")
+                    await asyncio.to_thread(stop_runtime_logging)
 
 
 @app.get("/", include_in_schema=False)
