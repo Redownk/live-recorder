@@ -1,40 +1,35 @@
-"""提供平台录制器共用的任务控制、FFmpeg 进程管理、健康检测与文件处理逻辑。"""
+"""协调录制任务、平台适配、健康恢复及输出处理。"""
 
-
-import time
-import json
-import math
-import os
-from datetime import datetime
 import asyncio
 from pathlib import Path
 
-from app.core.session import get_db_session
 from app.core.logger import get_logger
 from app.core.log_context import recording_log_context
-from app.shared.media.ffmpeg import get_ffmpeg_path
-from app.models import LiveRoomLogVideo
 from app.modules.settings.service import create_output_prefix
 from app.modules.recording.status import get_recording_status
 from app.modules.recording.tasks import get_recording_tasks
-from app.modules.recording.health import RecordingHealthError, RecordingHealthSample, recording_file_size
+from app.modules.recording.health import RecordingHealthError, RecordingRecoveryState, recording_file_size
 from app.modules.recording.disk import DiskSpaceError
-from sqlalchemy import text
+from app.modules.recording.outputs import RecordingOutput
+from app.modules.recording.process import RecordingProcessMonitor, spawn_recording_process
+from app.modules.recording.repository import RecordingRepository
+from app.shared.media.process import stop_process
 
 
 logger = get_logger(__name__)
 
+
 class BaseRecorder:
-    """封装平台共用录制流程，平台子类负责直播状态和播放流适配。"""
+    """协调平台录制流程，将进程、媒体文件及数据库操作委托给独立组件。"""
 
     def __init__(self, app, room):
         self.app = app
         self.room = room
         self.room_id = room["room_id"]
         self.platform = room["platform"]
-        self._health_restart_count = 0
-        self._health_last_error = None
-        self._health_failed = False
+        self._recovery = RecordingRecoveryState()
+        self.repository = RecordingRepository(app)
+        self.output = RecordingOutput(app, room, self.repository)
         self._segment_health_error = None
         self._recording_options = None
         self._timed_output = None
@@ -55,91 +50,25 @@ class BaseRecorder:
         return manager.settings if manager is not None else RecordingOptions()
 
     async def spawn_recording_process(self, command):
-        """启动 FFmpeg，并按配置启用进度输出和定时分片。
-
-        Args:
-            command: FFmpeg 命令参数列表，最后一项为输出文件路径。
-
-        Returns:
-            标准输出和标准错误均连接到管道的异步子进程。
-        """
-        from app.modules.recording.segments import TimedSegments
-
-        self._timed_output = None
-        if self.recording_options().segment_minutes:
-            self._timed_output = TimedSegments(command[-1])
-            command = self._timed_output.command(command, self.recording_options().segment_minutes * 60)
-        command = [command[0], "-progress", "pipe:1", "-stats_period", "1", "-nostats", *command[1:]]
-        return await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        """按本轮录制配置启动进程，并保存定时分片跟踪器。"""
+        process, self._timed_output = await spawn_recording_process(command, self.recording_options().segment_minutes)
+        return process
 
     async def wait_recording_process(self, process, output_file, log_id):
+        """委托进程监控器采样，将健康状态发布到当前录制会话。"""
         self._segment_health_error = None
-        stream = getattr(process, "stdout", None)
-        sample = RecordingHealthSample(progress_expected=stream is not None)
-        errors = bytearray()
-        current_index = self._timed_output.first_index if self._timed_output else 0
 
-        def publish():
+        def publish(sample):
             get_recording_status(self.app).health_updated(
                 self.room["id"], log_id,
-                sample.snapshot(self.health_options(), self._health_restart_count, self._health_last_error),
+                sample.snapshot(self.health_options(), self._recovery.restart_count, self._recovery.last_error),
             )
 
-        async def read_progress():
-            if stream is not None:
-                while line := await stream.readline():
-                    sample.progress_line(line.decode("utf-8", errors="replace").strip())
-
-        async def read_errors():
-            stderr = getattr(process, "stderr", None)
-            if stderr is not None:
-                while chunk := await stderr.read(4096):
-                    errors.extend(chunk)
-                    del errors[:-4096]
-
-        progress = asyncio.create_task(read_progress(), name="recording-progress")
-        error_reader = asyncio.create_task(read_errors(), name="recording-errors")
-        waiting = asyncio.create_task(process.wait(), name="recording-process-wait")
-        publish()
+        monitor = RecordingProcessMonitor(options=self.health_options, on_sample=publish, timed_output=self._timed_output)
         try:
-            while True:
-                done, _ = await asyncio.wait({waiting}, timeout=5)
-                if done:
-                    return await waiting
-                if self._timed_output is not None:
-                    size, index = await asyncio.to_thread(self._timed_output.observation)
-                    if index != current_index:
-                        current_index = index
-                        sample.media_time_us = 0
-                    sample.file_observation(size)
-                else:
-                    sample.file_observation(await asyncio.to_thread(recording_file_size, output_file))
-                if waiting.done():
-                    return await waiting
-                options = self.health_options()
-                publish()
-                if options.health_check_enabled:
-                    failure = sample.failure(options)
-                    if failure:
-                        self._segment_health_error = failure
-                        await self.stop_process(process)
-                        return await waiting
+            return await monitor.wait(process, output_file)
         finally:
-            # Reap the child before disposing its wait task, including manual/disk stops.
-            await self.stop_process(process)
-            if not error_reader.done() and getattr(process, "returncode", None) is not None:
-                try:
-                    await asyncio.wait_for(asyncio.shield(error_reader), timeout=1)
-                except (TimeoutError, OSError):
-                    pass
-            for task in (waiting, progress, error_reader):
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(waiting, progress, error_reader, return_exceptions=True)
-            if (not asyncio.current_task().cancelling() and getattr(process, "returncode", 0)
-                    and self._segment_health_error is None):
-                logger.warning(self._log_message("FFmpeg 异常退出: %s"), errors.decode("utf-8", errors="replace") or "无错误输出",
-                               extra={"event_code": "ffmpeg_exit"})
+            self._segment_health_error = monitor.health_error
 
     async def complete_recording_segment(self, output_file, log_id):
         if self._timed_output is not None:
@@ -153,7 +82,7 @@ class BaseRecorder:
         self._segment_had_data = size > 1024
         unhealthy = self._segment_health_error is not None
         if unhealthy:
-            # Even a short nonempty failed segment is retained; the next attempt gets a new name.
+            # 健康失败的分片保留原文件，下次尝试使用新编号。
             await self.health_failure(log_id, self._segment_health_error)
             return 1
         if size > 1024:
@@ -164,30 +93,23 @@ class BaseRecorder:
 
     async def health_failure(self, log_id, message):
         options = self.health_options()
-        self._health_last_error = message
-        exhausted = self._health_restart_count >= options.health_max_restarts
+        exhausted = self._recovery.register_failure(message, options.health_max_restarts)
         if exhausted:
-            self._health_failed = True
             get_recording_tasks(self.app).disabled_keys.add((self.platform, str(self.room_id)))
-        else:
-            self._health_restart_count += 1
         logger.warning(self._log_message("健康检测异常: %s; 自动恢复 %s/%s; %s"), message,
-                       self._health_restart_count, options.health_max_restarts, "暂停监控" if exhausted else "重新获取直播流",
+                       self._recovery.restart_count, options.health_max_restarts, "暂停监控" if exhausted else "重新获取直播流",
                        extra={"event_code": "recording_health"})
         try:
-            async with get_db_session(self.app) as db:
-                await db.execute(text("UPDATE live_room_log SET health_restart_count=:count, health_last_error=:error WHERE id=:id"),
-                                 {"count": self._health_restart_count, "error": message, "id": log_id})
-                if exhausted:
-                    await db.execute(text("UPDATE live_room SET monitor_enabled=0 WHERE id=:id"), {"id": self.room["id"]})
-                await db.commit()
+            await self.repository.save_health_failure(
+                log_id, self.room["id"], self._recovery.restart_count, message, exhausted=exhausted,
+            )
         except Exception:
             logger.exception(self._log_message("健康检测结果写入失败"))
         tracker = get_recording_status(self.app)
         session = tracker.sessions.get(self.room["id"])
         if session is not None and session.log_id == log_id:
             tracker.health_updated(self.room["id"], log_id, {**(session.health or {}), "state": "recovering",
-                "restart_count": self._health_restart_count, "last_error": message})
+                "restart_count": self._recovery.restart_count, "last_error": message})
         if exhausted:
             raise RecordingHealthError(f"健康检测自动恢复次数已用尽，已暂停该房间监控：{message}")
 
@@ -199,12 +121,12 @@ class BaseRecorder:
             try:
                 await get_disk_guard(self.app).ensure_can_start(prefix.parent)
             except DiskSpaceError:
-                self._health_failed = True
+                self._recovery.failed = True
                 raise
         info = await asyncio.wait_for(self.check_live_status(), timeout=30)
         if not info.get("is_live"):
             return None
-        await asyncio.sleep(min(5 * self._health_restart_count, 30))
+        await asyncio.sleep(min(5 * self._recovery.restart_count, 30))
         stream_url = await asyncio.wait_for(self.refresh_stream_url(info, previous_url), timeout=30)
         if not isinstance(stream_url, str) or not stream_url.strip():
             raise ValueError("重新获取直播流失败")
@@ -271,9 +193,7 @@ class BaseRecorder:
             log_id = getattr(self, "_log_id", None)
             if log_id is not None:
                 self.recording_finished(log_id)
-                async with get_db_session(self.app) as db:
-                    await db.execute(text("UPDATE live_room_log SET interrupted=1 WHERE id=:id AND end_live IS NULL"), {"id": log_id})
-                    await db.commit()
+                await self.repository.mark_interrupted(log_id)
         finally:
             prefix = getattr(self, "_output_prefix", None)
             if prefix is not None:
@@ -281,20 +201,8 @@ class BaseRecorder:
                 get_recording_tasks(self.app).output_paths.pop((self.platform, str(self.room_id)), None)
 
     async def stop_process(self, process):
-        if process is None or process.returncode is not None:
-            return
-        try:
-            process.terminate()
-        except ProcessLookupError:
-            pass
-        try:
-            await asyncio.wait_for(process.wait(), timeout=5)
-        except asyncio.TimeoutError:
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-            await process.wait()
+        """委托公共进程工具终止并回收录制子进程。"""
+        await stop_process(process)
 
     async def check_live_status(self):
         raise NotImplementedError
@@ -320,197 +228,22 @@ class BaseRecorder:
         get_recording_tasks(self.app).phases[(self.platform, str(self.room_id))] = "finishing"
 
     async def _get_max_online_count(self, log_id):
-        async with get_db_session(self.app) as db:
-            result = await db.execute(text("""
-                SELECT MAX(online_count)
-                FROM live_room_stats
-                WHERE live_room_log_id = :log_id
-            """), {
-                "log_id": log_id
-            })
-            return result.scalar()
+        return await self.repository.max_online_count(log_id)
 
     async def _get_last_total_user_count(self, log_id):
-        async with get_db_session(self.app) as db:
-            result = await db.execute(text("""
-                SELECT watch_user_count
-                FROM live_room_stats
-                WHERE live_room_log_id = :log_id
-                ORDER BY collect_time DESC, id DESC
-                LIMIT 1
-            """), {
-                "log_id": log_id
-            })
-            return result.scalar()
+        return await self.repository.last_total_user_count(log_id)
 
     @recording_log_context
     async def _post_process(self, file_name, segment_count, log_id):
-
-        import os
-
-        logger.info(self._log_message("开始后处理"))
-        get_recording_tasks(self.app).phases[(self.platform, str(self.room_id))] = "registering" if self.recording_options().segment_minutes else "merging"
-
-        if segment_count <= 0:
-            logger.info(self._log_message("没有分段文件，跳过处理"))
-            return
-
-        if self.recording_options().segment_minutes:
-            await self.register_timed_segments(file_name, segment_count, log_id)
-            return
-
-        formats = {}
-        for extension in ("ts", "flv"):
-            segments = [Path(f"{file_name}_{i}.{extension}") for i in range(1, segment_count + 1)]
-            segments = [path for path in segments if path.is_file() and path.stat().st_size > 0]
-            if segments:
-                formats[extension] = segments
-        if len(formats) > 1:
-            logger.warning(self._log_message("录制流格式发生变化，保留全部 TS / FLV 分片，不自动合并"))
-            return
-        if not formats:
-            logger.info(self._log_message("没有有效分段文件，跳过处理"))
-            return
-        ext, segments = next(iter(formats.items()))
-
-        from app.modules.recording.disk import DiskSpaceError, get_disk_guard
-
-        try:
-            await get_disk_guard(self.app).ensure_can_start(segments[0].parent, sum(path.stat().st_size for path in segments))
-        except DiskSpaceError as exc:
-            logger.warning(self._log_message("%s"), exc)
-            return
-
-        ffmpeg_path = get_ffmpeg_path()
-        list_file = f"{file_name}_filelist.txt"
-
-        with open(list_file, "w", encoding="utf-8") as f:
-            for segment in segments:
-                escaped_path = segment.resolve().as_posix().replace("'", "'\\''")
-                f.write(f"file '{escaped_path}'\n")
-
-        merged_file = f"{file_name}.{ext}"
-
-        logger.info(self._log_message("开始合并分段"))
-
-        merge_cmd = [
-            ffmpeg_path,
-            "-nostdin", "-n",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", list_file,
-            "-c", "copy",
-            merged_file
-        ]
-
-        process = await asyncio.create_subprocess_exec(
-            *merge_cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
+        """委托输出处理器合并或登记录制分片。"""
+        await self.output.finalize(
+            file_name, segment_count, log_id,
+            segment_minutes=self.recording_options().segment_minutes, timed_output=self._timed_output,
         )
-        try:
-            return_code = await process.wait()
-        finally:
-            await self.stop_process(process)
 
-        if return_code != 0 or not os.path.isfile(merged_file) or os.path.getsize(merged_file) == 0:
-            logger.warning(self._log_message("合并失败，保留分段文件，退出码: %s"), return_code, extra={"event_code": "processing"})
-            return
-
-        logger.info(self._log_message("分段合并完成"))
-
-        # Register the local video before cleaning up recording segments.
-        try:
-
-            # 获取文件大小 (byte)
-            file_size = os.path.getsize(merged_file)
-
-            # 使用 ffprobe 获取时长 (秒)
-            duration = 0
-            probe_cmd = [
-                "ffprobe", "-v", "error", "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1", merged_file
-            ]
-
-            try:
-                probe_process = await asyncio.create_subprocess_exec(
-                    *probe_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                try:
-                    stdout, stderr = await probe_process.communicate()
-                finally:
-                    await self.stop_process(probe_process)
-                if probe_process.returncode == 0:
-                    duration_str = stdout.decode('utf-8').strip()
-                    if duration_str:
-                        duration = int(float(duration_str))
-                else:
-                    logger.warning("ffprobe 错误: %s", stderr.decode("utf-8", errors="replace"))
-            except (OSError, ValueError) as exc:
-                logger.warning(self._log_message("视频时长读取失败: %s"), exc)
-
-            async with get_db_session(self.app) as db:
-                db.add(LiveRoomLogVideo(
-                    live_room_id=self.room["id"],
-                    live_room_log_id=log_id,
-                    file_name=os.path.basename(merged_file),
-                    file_path=str(Path(merged_file).resolve()),
-                    file_size=file_size,
-                    duration=duration,
-                ))
-                await db.commit()
-            logger.info(self._log_message("本地视频已保存: %s"), merged_file)
-
-        except Exception as e:
-            logger.exception(self._log_message("本地视频登记失败，保留录制文件: %s"), e)
-            return
-
-        logger.info(self._log_message("开始清理临时文件"))
-        try:
-            os.remove(list_file)
-            for segment in segments:
-                segment.unlink()
-
-            logger.info(self._log_message("临时文件清理完成"))
-
-        except Exception as e:
-            logger.exception(self._log_message("清理文件失败: %s"), e)
-
-        logger.info(self._log_message("后处理完成"))
-
+    @recording_log_context
     async def register_timed_segments(self, file_name, segment_count, log_id, probe_durations=True):
-        from sqlalchemy import select
-
-        if self._timed_output is not None:
-            _, last_index = await asyncio.to_thread(self._timed_output.observation)
-            segment_count = max(segment_count, last_index)
-        probe = str(Path(get_ffmpeg_path()).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")) if probe_durations else None
-        records = []
-        for index in range(1, segment_count + 1):
-            for extension in ("ts", "flv"):
-                path = Path(f"{file_name}_{index}.{extension}")
-                if not path.is_file() or path.is_symlink() or path.stat().st_size == 0:
-                    continue
-                duration = 0
-                process = None
-                try:
-                    if probe_durations:
-                        process = await asyncio.create_subprocess_exec(probe, "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path),
-                                                                       stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=15)
-                        value = float(json.loads(stdout).get("format", {}).get("duration") or 0)
-                        if math.isfinite(value) and value > 0:
-                            duration = int(value)
-                except (OSError, ValueError, TypeError, TimeoutError):
-                    logger.warning(self._log_message("分片时长读取失败，保留文件并登记大小"))
-                finally:
-                    await self.stop_process(process)
-                records.append(LiveRoomLogVideo(live_room_id=self.room["id"], live_room_log_id=log_id, file_name=path.name,
-                                               file_path=str(path.resolve()), file_size=path.stat().st_size, duration=duration))
-        async with get_db_session(self.app) as db:
-            existing = set((await db.execute(select(LiveRoomLogVideo.file_path).where(LiveRoomLogVideo.live_room_log_id == log_id))).scalars().all())
-            db.add_all([record for record in records if record.file_path not in existing])
-            await db.commit()
-        logger.info(self._log_message("定时分片已独立保存，不执行合并"))
+        """委托输出处理器登记分片，中断时允许跳过媒体探测。"""
+        await self.output.register_segments(
+            file_name, segment_count, log_id, timed_output=self._timed_output, probe_durations=probe_durations,
+        )

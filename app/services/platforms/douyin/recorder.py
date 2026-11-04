@@ -243,15 +243,15 @@ class DouyinRecorder(BaseRecorder):
                     "live_time": live_seconds,
                     "user_num": max_online_count,
                     "total_user": last_total_user_count,
-                    "interrupted": bool(asyncio.current_task().cancelling()) or self._health_failed,
+                    "interrupted": bool(asyncio.current_task().cancelling()) or self._recovery.failed,
                     "id": log_id
                 })
                 await db.commit()
 
             logger.info(self._log_message("%s 直播结束"), file_name)
-            if not asyncio.current_task().cancelling() and not self._health_failed:
+            if not asyncio.current_task().cancelling() and not self._recovery.failed:
                 await self._post_process(file_name, segment_index,log_id)
-            elif self.recording_options().segment_minutes and not self._health_failed:
+            elif self.recording_options().segment_minutes and not self._recovery.failed:
                 await self.register_timed_segments(file_name, segment_index, log_id, probe_durations=False)
             else:
                 logger.info(self._log_message("录制已中断，保留分片文件"))

@@ -88,7 +88,12 @@ app/
       tasks.py
       status.py
       recovery.py
-      base_recorder.py        # 通用录制流程、健康检测和文件处理
+      base_recorder.py         # 录制流程协调与平台扩展入口
+      process.py               # 录制进程、进度读取和健康采样
+      health.py                # 健康判断与恢复预算
+      outputs.py               # 分片后处理与视频登记协调
+      repository.py            # 录制日志、健康结果及视频数据访问
+      segments.py              # 定时分片参数和文件跟踪
       commands.py             # 共用 FFmpeg 录制命令
       factory.py              # 按平台创建录制器
     settings/                 # 录制设置与文件命名规则
@@ -101,8 +106,11 @@ app/
   shared/filesystem/          # 目录/视频文件浏览和访问限制
     browser.py
     access.py
-  shared/media/              # FFmpeg 工具定位
+  shared/media/              # 跨业务复用的媒体工具
     ffmpeg.py
+    process.py                # 子进程输出采集和退出回收
+    probe.py                  # 时长与轨道信息探测
+    concat.py                 # FFconcat 清单及分片合并
   services/platforms/        # 按平台集中放置适配器
     bilibili/                 # checker.py、recorder.py、signing.py
     douyin/                   # checker.py、recorder.py、signing.py
@@ -115,6 +123,11 @@ app/
 现有 HTTP 路径、数据库表、配置文件和 `python run.py` 启动方式保持不变。
 内部 Python 导入改用 `app.modules.*` 和 `app.shared.filesystem.*`；
 新增功能优先建立独立功能包，跨功能的通用能力放入 `shared/`。
+
+平台录制器继承 `BaseRecorder`，由基类协调独立的进程监控器、输出处理器和数据库访问组件。
+`RecordingProcessMonitor` 通过回调获取健康配置和发布采样，不直接访问数据库；
+`RecordingOutput` 负责先登记视频、再清理分片，基类及输出处理的数据库操作集中在 `RecordingRepository`。
+视频处理与诊断直接复用 `shared/media`，无需依赖录制器基类。
 
 ### 运行配置
 

@@ -23,7 +23,7 @@ from app.modules.recording.status import get_recording_status
 from app.modules.recording.tasks import get_recording_tasks
 from app.modules.settings.service import resolve_save_path
 from app.shared.media.ffmpeg import get_ffmpeg_path
-from app.modules.recording.base_recorder import BaseRecorder
+from app.shared.media.process import capture_output
 
 
 HARDWARE_ENCODERS = {"h264_nvenc", "hevc_nvenc", "h264_qsv", "hevc_qsv", "h264_amf", "hevc_amf", "h264_videotoolbox", "hevc_videotoolbox"}
@@ -55,14 +55,8 @@ def issues(store, room_id=None):
 
 
 async def capture(command, timeout=8):
-    process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
-        if process.returncode:
-            raise ValueError(stderr.decode("utf-8", errors="replace")[-2000:] or "命令执行失败")
-        return stdout.decode("utf-8", errors="replace")[:20000]
-    finally:
-        await BaseRecorder.stop_process(None, process)
+    stdout = await capture_output(*command, timeout=timeout)
+    return stdout.decode("utf-8", errors="replace")[:20000]
 
 
 def write_probe(directory):

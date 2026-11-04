@@ -2,8 +2,14 @@
 
 import os
 import shutil
+from pathlib import Path
 
 from app.core.paths import RESOURCE_DIR
+
+
+def get_ffprobe_path():
+    """返回与当前 FFmpeg 位于同一目录的 FFprobe 路径。"""
+    return str(Path(get_ffmpeg_path()).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe"))
 
 def get_ffmpeg_path():
     """查找可用的 FFmpeg 可执行文件。

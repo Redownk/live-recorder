@@ -3,7 +3,6 @@
 
 import asyncio
 import json
-import math
 import os
 from pathlib import Path
 import tempfile
@@ -13,7 +12,9 @@ from app.core.logger import get_logger
 from app.core.log_context import processing_log_context
 from app.shared.filesystem.browser import VIDEO_EXTENSIONS
 from app.shared.media.ffmpeg import get_ffmpeg_path
-from app.modules.recording.base_recorder import BaseRecorder
+from app.shared.media.concat import concat_text
+from app.shared.media.probe import probe_video
+from app.shared.media.process import capture_output, stop_process
 from app.modules.settings.service import resolve_save_path
 from app.modules.video_processing.schemas import ENCODERS
 
@@ -47,16 +48,6 @@ def output_paths(options, inputs):
     return outputs
 
 
-def concat_text(paths, durations=None):
-    lines = ["ffconcat version 1.0"]
-    for index, path in enumerate(paths):
-        escaped = path.as_posix().replace("'", "'\\''")
-        lines.append(f"file '{escaped}'")
-        if durations is not None:
-            lines.append(f"duration {durations[index]:.6f}")
-    return "\n".join(lines) + "\n"
-
-
 def codec_arguments(options):
     if options.encoder == "copy":
         return ["-c", "copy"]
@@ -86,14 +77,8 @@ class VideoProcessingManager:
                 raise ValueError(f"文件正在录制或自动合并，请结束录制后再处理: {path.name}")
 
     async def capture(self, *command):
-        process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), 30)
-            if process.returncode:
-                raise ValueError(stderr.decode("utf-8", errors="replace")[-2000:] or "FFmpeg 检测失败")
-            return stdout
-        finally:
-            await BaseRecorder.stop_process(self, process)
+        """采集媒体工具输出，超时或取消时自动回收进程。"""
+        return await capture_output(*command, timeout=30, error_message="FFmpeg 检测失败")
 
     async def capabilities(self):
         if self._capabilities is None:
@@ -106,16 +91,8 @@ class VideoProcessingManager:
         return self._capabilities
 
     async def probe(self, path):
-        executable = Path(get_ffmpeg_path()).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")
-        data = json.loads(await self.capture(str(executable), "-v", "error", "-protocol_whitelist", "file,pipe", "-show_streams", "-show_format", "-of", "json", str(path)))
-        streams = data.get("streams", [])
-        if not any(stream.get("codec_type") == "video" for stream in streams):
-            raise ValueError(f"没有视频轨道: {path.name}")
-        duration = float(data.get("format", {}).get("duration") or 0)
-        if not math.isfinite(duration) or duration <= 0:
-            raise ValueError(f"无法获取视频时长: {path.name}")
-        signature = [tuple(stream.get(key) for key in ("codec_type", "codec_name", "profile", "level", "width", "height", "pix_fmt", "sample_aspect_ratio", "r_frame_rate", "sample_rate", "channels", "channel_layout", "time_base", "extradata_size")) for stream in streams if stream.get("codec_type") in ("video", "audio")]
-        return duration, signature
+        """读取视频时长和用于判断合并兼容性的轨道签名。"""
+        return await probe_video(path, capture=self.capture)
 
     def submit(self, options):
         if self.closing or sum(job["status"] in ACTIVE for job in self.jobs.values()) >= 10:
@@ -184,7 +161,7 @@ class VideoProcessingManager:
             if process.returncode:
                 raise ValueError(errors.decode("utf-8", errors="replace") or "FFmpeg 处理失败")
         finally:
-            await BaseRecorder.stop_process(self, process)
+            await stop_process(process)
             await asyncio.gather(reader, return_exceptions=True)
 
     @processing_log_context
