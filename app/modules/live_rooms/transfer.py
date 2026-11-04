@@ -3,9 +3,9 @@
 from datetime import datetime, timezone
 
 from pydantic import ValidationError
-from sqlalchemy import select
 
 from app.models import LiveRoom
+from app.modules.live_rooms.repository import LiveRoomRepository
 from app.modules.live_rooms.schemas import RoomBackupEntry
 
 
@@ -14,7 +14,7 @@ BACKUP_FIELDS = tuple(RoomBackupEntry.model_fields)
 
 async def export_rooms(db):
     """返回未删除直播间的可迁移信息，排除运行状态和数据库内部字段。"""
-    rooms = (await db.execute(select(LiveRoom).where(LiveRoom.del_flag == 0).order_by(LiveRoom.id))).scalars().all()
+    rooms = await LiveRoomRepository(db).list_active(ascending=True)
     return {
         "format": "live-recorder-rooms", "version": 1,
         "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -32,7 +32,7 @@ async def plan_import(document, db):
     Returns:
         逐行结果及与新增结果对应的备份条目列表。
     """
-    existing = (await db.execute(select(LiveRoom.platform, LiveRoom.room_id).where(LiveRoom.del_flag == 0))).all()
+    existing = await LiveRoomRepository(db).active_identities()
     seen = {(platform.strip().upper(), room_id.strip()) for platform, room_id in existing}
     rows, entries = [], []
     for index, raw in enumerate(document.rooms, start=1):
@@ -73,8 +73,7 @@ async def import_rooms(payload, db):
         fields = entry.model_dump()
         fields["monitor_enabled"] = payload.enable_monitoring and entry.monitor_enabled
         rooms.append(LiveRoom(**fields))
-    db.add_all(rooms)
-    await db.commit()
+    await LiveRoomRepository(db).add_many(rooms)
     for row in rows:
         if row["status"] == "new":
             row.update(status="imported", message="已导入")

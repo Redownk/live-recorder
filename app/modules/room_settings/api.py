@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.session import get_db
 from app.core.logger import get_logger
-from app.models import RoomRecordingSettings
+from app.modules.settings.repository import SettingsRepository
 from app.modules.live_rooms.api import get_room
 from app.modules.room_settings.schemas import RoomRecordingOverrides
 from app.modules.settings.service import RecordingOptions, build_filename, ensure_writable_directory, resolve_save_path
@@ -50,17 +50,7 @@ async def persist(room_id, payload, request, db):
                 await asyncio.to_thread(ensure_writable_directory, resolve_save_path(values["save_path"]))
             except (OSError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail="房间保存目录不可用，请检查路径和写入权限") from exc
-        record = await db.get(RoomRecordingSettings, room_id)
-        if not values:
-            if record is not None:
-                await db.delete(record)
-        else:
-            if record is None:
-                record = RoomRecordingSettings(room_id=room_id)
-                db.add(record)
-            for key, value in payload.model_dump().items():
-                setattr(record, key, value)
-        await db.commit()
+        await SettingsRepository(db).save_overrides(room_id, payload.model_dump() if values else {})
         if values:
             manager.room_overrides[room_id] = values
         else:

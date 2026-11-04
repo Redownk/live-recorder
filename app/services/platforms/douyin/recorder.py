@@ -5,7 +5,6 @@ import asyncio
 import json
 import time
 from datetime import datetime
-from sqlalchemy import text
 
 from app.core.logger import get_logger
 from app.core.log_context import recording_log_context
@@ -16,7 +15,6 @@ from app.modules.recording.health import RecordingHealthError
 from app.modules.recording.disk import DiskSpaceError
 from app.modules.recording.quality import douyin_stream
 from app.shared.media.ffmpeg import get_ffmpeg_path
-from app.core.session import get_db_session
 
 
 logger = get_logger(__name__)
@@ -128,29 +126,10 @@ class DouyinRecorder(BaseRecorder):
         stream_url = douyin_stream(live_info, self.recording_options().quality)
 
         # 写入数据库日志
-        async with get_db_session(self.app) as db:
-            result = await db.execute(text("""
-                INSERT INTO live_room_log
-                    (live_room_id, platform, owner, start_live, create_time, del_flag)
-                VALUES (:live_room_id, :platform, :owner, :start_live, CURRENT_TIMESTAMP, 0)
-            """), {
-                "live_room_id": self.room["id"],
-                "platform": self.platform,
-                "owner": live_info["owner"],
-                "start_live": start_time
-            })
-            await db.execute(text("""
-                                  UPDATE live_room
-                                  SET last_live_time=:last_live_time
-                                  where id = :live_room_id
-                                  """), {
-                                 "live_room_id": self.room["id"],
-                                 "last_live_time": start_time
-                             })
-            await db.commit()
-            log_id = result.lastrowid
+        log_id = await self.repository.start_log(
+            self.room["id"], self.platform, live_info["owner"], start_time,
+        )
 
-        # 启动异步录制任务
         self._log_id = log_id
         await self.record_loop(log_id, output_prefix, stream_url)
 
@@ -225,24 +204,10 @@ class DouyinRecorder(BaseRecorder):
             live_seconds = int(time.time() - start_timestamp)
             max_online_count = await self._get_max_online_count(log_id)
             last_total_user_count = await self._get_last_total_user_count(log_id)
-            async with get_db_session(self.app) as db:
-                await db.execute(text("""
-                    UPDATE live_room_log
-                    SET end_live  = :end_live,
-                        live_time = :live_time,
-                        user_num = :user_num,
-                        total_user = :total_user,
-                        interrupted = :interrupted
-                    WHERE id = :id
-                """), {
-                    "end_live": end_time,
-                    "live_time": live_seconds,
-                    "user_num": max_online_count,
-                    "total_user": last_total_user_count,
-                    "interrupted": bool(asyncio.current_task().cancelling()) or self._recovery.failed,
-                    "id": log_id
-                })
-                await db.commit()
+            await self.repository.finish_log(
+                log_id, end_time, live_seconds, max_online_count, last_total_user_count,
+                interrupted=bool(asyncio.current_task().cancelling()) or self._recovery.failed,
+            )
 
             logger.info(self._log_message("%s 直播结束"), file_name)
             if not asyncio.current_task().cancelling() and not self._recovery.failed:
@@ -274,22 +239,9 @@ class DouyinRecorder(BaseRecorder):
                     logger.warning(self._log_message("Douyin stats missing key: %s, skipping"), e)
                     continue
 
-                async with get_db_session(self.app) as db:
-                    await db.execute(text("""
-                                          INSERT INTO live_room_stats
-                                              (live_room_id,live_room_log_id, online_count, like_count, watch_user_count, collect_time)
-                                          VALUES (:live_room_id,:log_id, :online, :like, :watch, CURRENT_TIMESTAMP)
-                                          """), {
-                                         "live_room_id": self.room['id'],
-                                         "log_id": log_id,
-                                         "online": online_count,
-                                         "like": like_count,
-                                         "watch": total_user_count
-                                     })
-
-                    await db.commit()
-
-                # print(f"数据采集: watch={watch_count} like={like_count}")
+                await self.repository.add_stats(
+                    self.room["id"], log_id, online_count, like_count, total_user_count,
+                )
 
         except asyncio.CancelledError:
             logger.info(self._log_message("数据采集任务结束"))

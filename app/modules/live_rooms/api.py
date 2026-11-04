@@ -5,11 +5,13 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
-from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.session import get_db
-from app.models import LiveRoom, LiveRoomLog, LiveRoomLogVideo, LiveRoomStats, RoomRecordingSettings
+from app.models import LiveRoom
+from app.modules.live_rooms.repository import LiveRoomRepository
+from app.modules.settings.repository import SettingsRepository
+from app.modules.recording.repository import RecordingHistoryRepository
 from app.modules.live_rooms.schemas import LiveRoomCreate, LiveRoomOut, LiveRoomUpdate, MonitorUpdate, RecordingStop
 from app.modules.live_rooms.checker import LiveChecker
 from app.modules.recording.factory import create_recorder
@@ -35,20 +37,8 @@ def normalize_platform(platform: str) -> str:
 
 @router.get("/rooms", response_model=list[LiveRoomOut])
 async def list_rooms(keyword: str | None = Query(default=None), db: AsyncSession = Depends(get_db)):
-    stmt = select(LiveRoom).where(LiveRoom.del_flag == 0).order_by(desc(LiveRoom.id))
-    if keyword:
-        like = f"%{keyword}%"
-        stmt = stmt.where(
-            or_(
-                LiveRoom.room_id.like(like),
-                LiveRoom.owner.like(like),
-                LiveRoom.remark.like(like),
-                LiveRoom.platform.like(like),
-            )
-        )
-    result = await db.execute(stmt)
-    rooms = result.scalars().all()
-    customized = set((await db.execute(select(RoomRecordingSettings.room_id))).scalars().all())
+    rooms = await LiveRoomRepository(db).list_active(keyword)
+    customized = await SettingsRepository(db).customized_room_ids()
     for room in rooms:
         room.recording_settings_customized = room.id in customized
     return rooms
@@ -91,9 +81,7 @@ async def create_room(payload: LiveRoomCreate, request: Request, db: AsyncSessio
         cover=info.get("cover"),
         monitor_enabled=payload.monitor_enabled,
     )
-    db.add(room)
-    await db.commit()
-    await db.refresh(room)
+    await LiveRoomRepository(db).save(room, refresh=True)
     request.app.state.recording_settings.touch_room(room.id)
     logger.info("直播间已添加，监控%s", "已启用" if room.monitor_enabled else "已暂停", extra=room_log_fields({"id": room.id, "platform": room.platform, "room_id": room.room_id}))
     return room
@@ -101,15 +89,15 @@ async def create_room(payload: LiveRoomCreate, request: Request, db: AsyncSessio
 
 @router.get("/rooms/{room_id}", response_model=LiveRoomOut)
 async def get_room(room_id: int, db: AsyncSession = Depends(get_db)):
-    room = await db.get(LiveRoom, room_id)
+    room = await LiveRoomRepository(db).get_active(room_id)
     if room is None or room.del_flag != 0:
         raise HTTPException(status_code=404, detail="直播间不存在")
-    room.recording_settings_customized = await db.get(RoomRecordingSettings, room.id) is not None
+    room.recording_settings_customized = await SettingsRepository(db).has_overrides(room.id)
     return room
 
 
 async def refresh_control_room(room, db, key):
-    await db.refresh(room)
+    await LiveRoomRepository(db).refresh(room)
     if room.del_flag != 0:
         raise HTTPException(status_code=404, detail="直播间不存在")
     if (room.platform, str(room.room_id)) != key:
@@ -132,7 +120,7 @@ async def update_room(room_id: int, payload: LiveRoomUpdate, request: Request, d
             raise HTTPException(status_code=409, detail="请先停止该直播间录制，再修改平台或房间号")
         for name, value in data.items():
             setattr(room, name, value)
-        await db.commit()
+        await LiveRoomRepository(db).save(room)
         if (was_monitoring and data.get("monitor_enabled") is False) or identity_changed:
             manager.disabled_keys.add(key)
             await manager.stop_room(key)
@@ -141,7 +129,7 @@ async def update_room(room_id: int, payload: LiveRoomUpdate, request: Request, d
             if data.get("monitor_enabled") is True:
                 manager.notices.pop((room.platform, str(room.room_id)), None)
                 request.app.state.recording_settings.touch_room(room.id)
-    await db.refresh(room)
+    await LiveRoomRepository(db).refresh(room)
     return room
 
 
@@ -153,7 +141,7 @@ async def update_monitor(room_id: int, payload: MonitorUpdate, request: Request,
     async with manager.control_lock(key):
         await refresh_control_room(room, db, key)
         room.monitor_enabled = payload.monitor_enabled
-        await db.commit()
+        await LiveRoomRepository(db).save(room)
         if payload.monitor_enabled:
             manager.disabled_keys.discard(key)
             manager.notices.pop(key, None)
@@ -161,7 +149,7 @@ async def update_monitor(room_id: int, payload: MonitorUpdate, request: Request,
         else:
             manager.disabled_keys.add(key)
             await manager.stop_room(key)
-    await db.refresh(room)
+    await LiveRoomRepository(db).refresh(room)
     logger.info("房间监控%s", "已启用" if room.monitor_enabled else "已暂停",
                 extra={"room_id": room.id, "platform": room.platform, "platform_room_id": str(room.room_id)})
     return room
@@ -199,7 +187,7 @@ async def stop_room_recording(room_id: int, payload: RecordingStop, request: Req
         await refresh_control_room(room, db, key)
         if payload.disable_monitor:
             room.monitor_enabled = False
-            await db.commit()
+            await LiveRoomRepository(db).save(room)
             manager.disabled_keys.add(key)
         await manager.stop_room(key)
         logger.info("手动停止本次录制，%s", "暂停监控" if payload.disable_monitor else "保留监控",
@@ -236,40 +224,29 @@ async def delete_room(room_id: int, request: Request, db: AsyncSession = Depends
     async with manager.control_lock(key):
         await refresh_control_room(room, db, key)
         room.del_flag = 1
-        await db.commit()
+        await LiveRoomRepository(db).save(room)
         manager.disabled_keys.add(key)
         await manager.stop_room(key)
         settings = request.app.state.recording_settings
         async with settings.write_lock:
-            overrides = await db.get(RoomRecordingSettings, room_id)
-            if overrides is not None:
-                await db.delete(overrides)
-                await db.commit()
+            await SettingsRepository(db).save_overrides(room_id, {})
             settings.room_overrides.pop(room_id, None)
             settings.touch_room(room_id)
 
 
 @router.get("/logs")
 async def list_logs(room_id: int | None = Query(default=None), limit: int = Query(default=50, ge=1, le=200), db: AsyncSession = Depends(get_db)):
-    stmt = select(LiveRoomLog).where(LiveRoomLog.del_flag == 0).order_by(desc(LiveRoomLog.id)).limit(limit)
-    if room_id is not None:
-        stmt = stmt.where(LiveRoomLog.live_room_id == room_id)
-    result = await db.execute(stmt)
-    return result.scalars().all()
+    return await RecordingHistoryRepository(db).list_logs(room_id, limit)
 
 
 @router.get("/videos")
 async def list_videos(log_id: int | None = Query(default=None), limit: int = Query(default=50, ge=1, le=200), db: AsyncSession = Depends(get_db)):
-    stmt = select(LiveRoomLogVideo).where(LiveRoomLogVideo.del_flag == 0).order_by(desc(LiveRoomLogVideo.id)).limit(limit)
-    if log_id is not None:
-        stmt = stmt.where(LiveRoomLogVideo.live_room_log_id == log_id)
-    result = await db.execute(stmt)
-    return result.scalars().all()
+    return await RecordingHistoryRepository(db).list_videos(log_id, limit)
 
 
 @router.get("/videos/{video_id}/file")
 async def get_video_file(video_id: int, db: AsyncSession = Depends(get_db)):
-    video = await db.get(LiveRoomLogVideo, video_id)
+    video = await RecordingHistoryRepository(db).get_video(video_id)
     if video is None or video.del_flag != 0 or not video.file_path:
         raise HTTPException(status_code=404, detail="本地视频不存在")
     path = Path(video.file_path)
@@ -281,11 +258,4 @@ async def get_video_file(video_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.get("/stats")
 async def list_stats(log_id: int, limit: int = Query(default=100, ge=1, le=500), db: AsyncSession = Depends(get_db)):
-    stmt = (
-        select(LiveRoomStats)
-        .where(LiveRoomStats.live_room_log_id == log_id)
-        .order_by(desc(LiveRoomStats.id))
-        .limit(limit)
-    )
-    result = await db.execute(stmt)
-    return result.scalars().all()
+    return await RecordingHistoryRepository(db).list_stats(log_id, limit)

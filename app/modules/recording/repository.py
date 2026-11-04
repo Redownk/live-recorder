@@ -1,9 +1,10 @@
 """集中处理录制日志、健康结果、统计查询及本地视频登记。"""
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.session import get_db_session
-from app.models import LiveRoomLogVideo
+from app.models import LiveRoom, LiveRoomLog, LiveRoomLogVideo, LiveRoomStats
 
 
 class RecordingRepository:
@@ -11,6 +12,50 @@ class RecordingRepository:
 
     def __init__(self, app):
         self.app = app
+
+    async def start_log(self, room_id, platform, owner, start_time):
+        """在同一事务中创建录制日志并更新房间最近开播时间，返回日志 ID。"""
+        async with get_db_session(self.app) as db:
+            record = LiveRoomLog(
+                live_room_id=room_id, platform=platform, owner=owner,
+                start_live=start_time, create_time=func.current_timestamp(),
+            )
+            db.add(record)
+            await db.execute(update(LiveRoom).where(LiveRoom.id == room_id).values(
+                last_live_time=start_time, update_time=LiveRoom.update_time,
+            ))
+            await db.commit()
+            return record.id
+
+    async def finish_log(self, log_id, end_time, live_seconds, user_num, total_user, *, interrupted):
+        """提交录制结束时间、人数和中断标记。"""
+        async with get_db_session(self.app) as db:
+            await db.execute(update(LiveRoomLog).where(LiveRoomLog.id == log_id).values(
+                end_live=end_time, live_time=live_seconds, user_num=user_num,
+                total_user=str(total_user) if total_user is not None else None, interrupted=interrupted,
+            ))
+            await db.commit()
+
+    async def add_stats(self, room_id, log_id, online, likes, watched):
+        """保存一次平台统计采样，人数使用文本保留平台的展示格式。"""
+        async with get_db_session(self.app) as db:
+            db.add(LiveRoomStats(
+                live_room_id=room_id, live_room_log_id=log_id,
+                online_count=str(online) if online is not None else None,
+                like_count=str(likes) if likes is not None else None,
+                watch_user_count=str(watched) if watched is not None else None,
+                collect_time=func.current_timestamp(),
+            ))
+            await db.commit()
+
+    async def recover_interrupted(self):
+        """标记尚未结束的有效录制日志，返回本次更新数量。"""
+        async with get_db_session(self.app) as db:
+            result = await db.execute(update(LiveRoomLog).where(
+                LiveRoomLog.end_live.is_(None), LiveRoomLog.interrupted.is_(False), LiveRoomLog.del_flag == 0,
+            ).values(interrupted=True))
+            await db.commit()
+            return result.rowcount
 
     async def mark_interrupted(self, log_id):
         """将尚未写入结束时间的录制日志标记为中断。"""
@@ -69,3 +114,34 @@ class RecordingRepository:
                 for video in videos if video["file_path"] not in existing
             ])
             await db.commit()
+
+
+class RecordingHistoryRepository:
+    """复用请求会话查询录制历史、本地视频和统计数据。"""
+
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def list_logs(self, room_id, limit):
+        """按 ID 倒序查询有效日志，可按房间过滤。"""
+        stmt = select(LiveRoomLog).where(LiveRoomLog.del_flag == 0)
+        if room_id is not None:
+            stmt = stmt.where(LiveRoomLog.live_room_id == room_id)
+        return (await self.db.scalars(stmt.order_by(LiveRoomLog.id.desc()).limit(limit))).all()
+
+    async def list_videos(self, log_id, limit):
+        """按 ID 倒序查询有效视频，可按录制日志过滤。"""
+        stmt = select(LiveRoomLogVideo).where(LiveRoomLogVideo.del_flag == 0)
+        if log_id is not None:
+            stmt = stmt.where(LiveRoomLogVideo.live_room_log_id == log_id)
+        return (await self.db.scalars(stmt.order_by(LiveRoomLogVideo.id.desc()).limit(limit))).all()
+
+    async def get_video(self, video_id):
+        """按 ID 获取视频登记记录。"""
+        return await self.db.get(LiveRoomLogVideo, video_id)
+
+    async def list_stats(self, log_id, limit):
+        """按 ID 倒序查询指定录制日志的统计采样。"""
+        return (await self.db.scalars(select(LiveRoomStats).where(
+            LiveRoomStats.live_room_log_id == log_id,
+        ).order_by(LiveRoomStats.id.desc()).limit(limit))).all()

@@ -3,7 +3,8 @@
 
 import asyncio
 from time import monotonic
-from sqlalchemy import text
+from app.core.session import get_db_session
+from app.modules.live_rooms.repository import LiveRoomRepository
 from app.modules.recording.factory import create_recorder
 from app.core.logger import setup_logging, get_logger
 from app.core.log_context import room_log_fields
@@ -45,9 +46,8 @@ async def crawler_loop(app, stop_event):
         settings_manager.changed.clear()
         interval = settings_manager.settings.check_interval_seconds
         try:
-            async with app.state.db() as db:
-                result = await db.execute(text("select * from live_room where monitor_enabled=1 and del_flag=0"))
-                rooms = result.mappings().all()
+            async with get_db_session(app) as db:
+                rooms = await LiveRoomRepository(db).monitored_snapshots()
             enabled_ids = {room["id"] for room in rooms}
             last_checks = {key: value for key, value in last_checks.items() if key in enabled_ids}
             logger.info("本轮扫描启用直播间数量: %s", len(rooms))

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.core.log_context import log_context, room_log_fields
 from app.core.logger import get_logger
 from app.models import LiveRoom
+from app.modules.live_rooms.repository import LiveRoomRepository
 from app.modules.observability.diagnostics import HARDWARE_ENCODERS, capture, diagnose, diagnostic_archive, issues
 from app.modules.observability.redaction import export_safe, redact
 from app.modules.recording.status import get_recording_status
@@ -120,7 +121,7 @@ async def platform_diagnostic(room_id: int, request: Request):
     store = store_for(request)
     async with diagnostic_lock(request):
         async with request.app.state.db() as db:
-            room = await db.get(LiveRoom, room_id)
+            room = await LiveRoomRepository(db).get_active(room_id)
             if room is None or room.del_flag:
                 raise HTTPException(status_code=404, detail="直播间不存在")
             fields = {column.name: getattr(room, column.name) for column in LiveRoom.__table__.columns}

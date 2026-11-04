@@ -5,11 +5,9 @@ import asyncio
 import time
 from datetime import datetime
 
-from sqlalchemy import text
 
 from app.core.logger import get_logger
 from app.core.log_context import recording_log_context
-from app.core.session import get_db_session
 from app.services.platforms.douyu.checker import DouyuLiveChecker
 from app.shared.media.ffmpeg import get_ffmpeg_path
 from app.modules.recording.base_recorder import BaseRecorder
@@ -46,27 +44,9 @@ class DouyuRecorder(BaseRecorder):
 
         stream_url = await self.refresh_stream_url(live_info, None)
 
-        async with get_db_session(self.app) as db:
-            result = await db.execute(text("""
-                INSERT INTO live_room_log
-                    (live_room_id, platform, owner, start_live, create_time, del_flag)
-                VALUES (:live_room_id, :platform, :owner, :start_live, CURRENT_TIMESTAMP, 0)
-            """), {
-                "live_room_id": self.room["id"],
-                "platform": self.platform,
-                "owner": live_info["owner"],
-                "start_live": start_time
-            })
-            await db.execute(text("""
-                UPDATE live_room
-                SET last_live_time=:last_live_time
-                where id = :live_room_id
-            """), {
-                "live_room_id": self.room["id"],
-                "last_live_time": start_time
-            })
-            await db.commit()
-            log_id = result.lastrowid
+        log_id = await self.repository.start_log(
+            self.room["id"], self.platform, live_info["owner"], start_time,
+        )
 
         self._log_id = log_id
         await self.record_loop(log_id, output_prefix, stream_url)
@@ -141,27 +121,11 @@ class DouyuRecorder(BaseRecorder):
 
             end_time = datetime.now()
             live_seconds = int(time.time() - start_timestamp)
-            # max_online_count = await self._get_max_online_count(log_id)
-            # last_total_user_count = await self._get_last_total_user_count(log_id)
 
-            async with get_db_session(self.app) as db:
-                await db.execute(text("""
-                    UPDATE live_room_log
-                    SET end_live  = :end_live,
-                        live_time = :live_time,
-                        user_num = :user_num,
-                        total_user = :total_user,
-                        interrupted = :interrupted
-                    WHERE id = :id
-                """), {
-                    "end_live": end_time,
-                    "live_time": live_seconds,
-                    "user_num": 0,
-                    "total_user": 0,
-                    "interrupted": bool(asyncio.current_task().cancelling()) or self._recovery.failed,
-                    "id": log_id
-                })
-                await db.commit()
+            await self.repository.finish_log(
+                log_id, end_time, live_seconds, 0, 0,
+                interrupted=bool(asyncio.current_task().cancelling()) or self._recovery.failed,
+            )
 
             logger.info(self._log_message("%s 直播结束"), file_name)
             if not asyncio.current_task().cancelling() and not self._recovery.failed:
@@ -170,36 +134,3 @@ class DouyuRecorder(BaseRecorder):
                 await self.register_timed_segments(file_name, segment_index, log_id, probe_durations=False)
             else:
                 logger.info(self._log_message("录制已中断，保留分片文件"))
-
-    # async def _collect_live_data_loop(self, log_id):
-    #     try:
-    #         while True:
-    #             await asyncio.sleep(300)
-    #             info = await DouyuLiveChecker.get_room_info(self.room_id)
-    #             room_info = info.get("room") or {}
-    #             if not room_info:
-    #                 continue
-    #
-    #             try:
-    #                 online_count = room_info.get("online")
-    #                 like_count = room_info.get("fans_num") or 0
-    #                 total_user_count = room_info.get("hn") or room_info.get("hot") or online_count
-    #             except (KeyError, TypeError) as e:
-    #                 logger.warning("Douyu stats missing key: %s, skipping", e)
-    #                 continue
-    #
-    #             async with get_db_session(self.app) as db:
-    #                 await db.execute(text("""
-    #                     INSERT INTO live_room_stats
-    #                         (live_room_id, live_room_log_id, online_count, like_count, watch_user_count, collect_time)
-    #                     VALUES (:live_room_id, :log_id, :online, :like, :watch, CURRENT_TIMESTAMP)
-    #                 """), {
-    #                     "live_room_id": self.room["id"],
-    #                     "log_id": log_id,
-    #                     "online": online_count,
-    #                     "like": like_count,
-    #                     "watch": total_user_count
-    #                 })
-    #                 await db.commit()
-    #     except asyncio.CancelledError:
-    #         logger.info("数据采集任务结束")

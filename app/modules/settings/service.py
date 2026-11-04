@@ -14,8 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.core.config import ROOT_DIR
 from app.core.session import get_db_session
-from app.models import RecordingSettings, RoomRecordingSettings
-from sqlalchemy import select
+from app.modules.settings.repository import SettingsRepository
 
 
 DEFAULT_FILENAME_TEMPLATE = "{platform}_{owner}_{timestamp}"
@@ -131,14 +130,7 @@ class RecordingSettingsManager:
             path = resolve_save_path(settings.save_path)
             await asyncio.to_thread(ensure_writable_directory, path)
             async with get_db_session(app) as db:
-                record = await db.get(RecordingSettings, 1)
-                if record is None:
-                    record = RecordingSettings(id=1, **settings.model_dump())
-                    db.add(record)
-                else:
-                    for key, value in settings.model_dump().items():
-                        setattr(record, key, value)
-                await db.commit()
+                await SettingsRepository(db).save_global(settings.model_dump())
             self.settings = settings
             self.schedule_revision += 1
             self.changed.set()
@@ -146,9 +138,9 @@ class RecordingSettingsManager:
 
 async def init_recording_settings(app):
     async with get_db_session(app) as db:
-        record = await db.get(RecordingSettings, 1)
+        record = await SettingsRepository(db).get_global()
         settings = RecordingOptions.model_validate(record) if record is not None else RecordingOptions()
-        overrides = (await db.execute(select(RoomRecordingSettings))).scalars().all()
+        overrides = await SettingsRepository(db).list_overrides()
     app.state.recording_settings = RecordingSettingsManager(settings)
     app.state.recording_settings.room_overrides = {
         item.room_id: {name: getattr(item, name) for name in ("save_path", "filename_template", "check_interval_seconds", "quality", "segment_minutes") if getattr(item, name) is not None}

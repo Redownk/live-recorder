@@ -3,7 +3,6 @@
 
 from contextlib import asynccontextmanager
 from fastapi import Request
-from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def get_session_factory(request: Request):
@@ -27,16 +26,8 @@ async def get_db(request: Request):
     Yields:
         在请求依赖使用结束后关闭的异步数据库会话。
     """
-    async_session_factory = request.app.state.db
-
-    async with async_session_factory() as session:
-        try:
-            yield session
-        except Exception:
-            await session.rollback()
-            raise
-        finally:
-            await session.close()
+    async with get_db_session(request.app) as session:
+        yield session
 
 
 @asynccontextmanager
@@ -54,8 +45,6 @@ async def get_db_session(app):
     async with async_session_factory() as session:
         try:
             yield session
-        except Exception:
+        except BaseException:
             await session.rollback()
             raise
-        finally:
-            await session.close()

@@ -117,6 +117,7 @@ app/
     douyu/                    # checker.py、recorder.py
     common/                   # HTTP 客户端、响应解析和 User-Agent 工具
   core/                      # 配置、数据库、日志和单实例锁
+  migrations/                # 固定版本的建表快照、历史升级脚本与执行器
   models.py                  # 共享 SQLite 数据模型
 ```
 
@@ -128,6 +129,32 @@ app/
 `RecordingProcessMonitor` 通过回调获取健康配置和发布采样，不直接访问数据库；
 `RecordingOutput` 负责先登记视频、再清理分片，基类及输出处理的数据库操作集中在 `RecordingRepository`。
 视频处理与诊断直接复用 `shared/media`，无需依赖录制器基类。
+
+业务数据库访问按模块集中在 `repository.py`：`LiveRoomRepository` 负责直播间与轮询快照，
+`SettingsRepository` 负责全局及房间设置，`RecordingRepository` 负责后台录制写入，
+`RecordingHistoryRepository` 负责日志、视频和统计查询。接口与平台录制器调用这些组件，
+不自行编写 SQL。HTTP 请求和后台任务共用会话管理逻辑，发生异常或取消时回滚并关闭会话；
+写入方法以业务操作为事务边界，内存配置在数据库提交成功后更新。
+
+### 数据库升级
+
+当前版本使用 SQLite，后端获取单实例锁后自动执行 `app/migrations/runner.py`。
+`schema_migrations` 保存版本号、名称和应用时间，启动时只执行尚未应用的版本。
+首次创建数据库也经过相同的迁移流程；已有数据库没有版本表时，会先创建一致性备份，
+再依次执行历史兼容升级。已有业务数据库每次有待执行升级时都会在同级 `backups/` 目录
+创建 `*-before-upgrade-vNNNN-时间戳.db`，普通重启不会重复备份或迁移。
+
+现有迁移依次为：`v0001_baseline` 建立固定的表和索引快照，`v0002_legacy_columns`
+补齐旧版字段和日志默认值，`v0003_remove_title` 移除标题并更新命名模板。
+同次启动的所有待执行迁移和版本记录在一个事务中提交；任何一步失败都会回滚，阻止启动。
+数据库版本高于程序版本、历史版本缺失或名称不匹配时，也会拒绝启动。
+
+后续修改模型时，必须新增 `vNNNN_描述.py` 并在 `MIGRATIONS` 末尾注册版本、名称和
+`upgrade(connection)`，不修改已发布脚本，不在 `init_db` 或业务代码中追加临时 DDL。
+迁移中使用固定 SQL，不引用持续变化的 ORM 模型；通过传入的连接执行，不能自行提交事务。
+发布前验证新库初始化、旧库数据保留、重复启动及失败回滚。可查询
+`SELECT version, name, applied_at FROM schema_migrations ORDER BY version;` 查看升级记录。
+回退到旧程序前应停止后端，保留当前数据库，再使用升级前备份恢复；不自动执行数据降级。
 
 直播标题已从直播间、录制历史、接口和 Excel 字段中移除。旧 SQLite 数据库在后端启动时
 自动迁移：先在数据库所在目录的 `backups/` 中创建一致性备份，再删除 `live_room.title`
