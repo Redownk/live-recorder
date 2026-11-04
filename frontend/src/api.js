@@ -1,12 +1,13 @@
 const baseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
 async function request(path, { body, binary = false, ...options } = {}) {
+  const isFile = body instanceof Blob;
   let response;
   try {
     response = await fetch(`${baseUrl}${path}`, {
       ...options,
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: body === undefined ? undefined : { 'Content-Type': isFile ? (body.type || 'application/octet-stream') : 'application/json' },
+      body: body === undefined ? undefined : isFile ? body : JSON.stringify(body),
     });
   } catch {
     throw new Error('无法连接服务，请检查后端是否运行');
@@ -54,6 +55,9 @@ export const api = {
   saveSettings: (body) => request('/api/settings', { method: 'PUT', body }),
   previewSettings: (body) => request('/api/settings/preview', { method: 'POST', body }),
   rooms: (params) => request(`/api/rooms${query(params)}`),
+  exportRooms: () => request('/api/rooms/export', { binary: true }),
+  previewRoomImport: (file) => request('/api/rooms/import/preview', { method: 'POST', body: file }),
+  importRooms: (file, enableMonitoring) => request(`/api/rooms/import${query({ enable_monitoring: enableMonitoring })}`, { method: 'POST', body: file }),
   recordingStatuses: () => request('/api/recording-status'),
   addRoom: (body) => request('/api/rooms', { method: 'POST', body }),
   editRoom: (id, body) => request(`/api/rooms/${id}`, { method: 'PUT', body }),

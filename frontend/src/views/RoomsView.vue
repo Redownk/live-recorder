@@ -7,6 +7,7 @@ import ModalDialog from '../components/ModalDialog.vue';
 import DiskStatus from '../components/DiskStatus.vue';
 import RuntimeLogPanel from '../components/RuntimeLogPanel.vue';
 import RoomRecordingSettings from '../components/RoomRecordingSettings.vue';
+import RoomTransfer from '../components/RoomTransfer.vue';
 
 const notify = inject('notify');
 const rooms = ref([]);
@@ -242,6 +243,7 @@ loadRecordingStatus();
         </select>
       </div>
       <div class="toolbar-actions">
+        <RoomTransfer :disabled="remarkSaving || saving" @imported="refreshRooms" />
         <button class="icon-button" title="刷新直播间" aria-label="刷新直播间" :disabled="loading" @click="refreshRooms"><RefreshCw :size="18" :class="{ spinning: loading }" /></button>
         <button class="primary" :disabled="remarkSaving" @click="openModal('add')"><Plus :size="17" />添加直播间</button>
       </div>

@@ -18,10 +18,12 @@ from app.modules.recording.tasks import get_recording_tasks
 from app.modules.recording.disk import DiskSpaceError
 from app.core.log_context import log_context, room_log_fields
 from app.core.logger import get_logger
+from app.modules.live_rooms.transfer_api import router as transfer_router
 
 
 router = APIRouter(prefix="/api", tags=["录制管理"])
 logger = get_logger(__name__)
+router.include_router(transfer_router)
 
 
 def normalize_platform(platform: str) -> str:
