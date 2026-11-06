@@ -45,6 +45,41 @@ npm run dev
 
 ## 配置
 
+### Docker
+
+镜像使用 Python 3.15.2，构建时自动编译 Vue 前端，并安装 FFmpeg、FFprobe 和
+用于转发退出信号的 tini。最终镜像以 UID/GID `10001:10001` 运行，容器内使用单进程
+监听 `8000`；宿主机端口可通过 `-p` 调整，不需要另起前端或 Nginx。
+
+在项目根目录构建并启动（需要 Docker 的 Linux 容器引擎）：
+
+```powershell
+docker build -t live-recorder:local .
+docker run -d --name live-recorder --restart unless-stopped --stop-timeout 120 -p 8000:8000 -v live-recorder-data:/data live-recorder:local
+```
+
+打开 `http://localhost:8000`。首次启动使用空 Cookie 配置，监控默认关闭；在设置页填写
+Cookie、添加直播间后启用监控。`.dockerignore` 限定构建文件，本机 `config.yaml`、
+虚拟环境、数据库、录制文件和日志均不会进入镜像。
+
+`live-recorder-data` 命名卷保存以下内容，重新创建容器时保留同一个卷即可继续使用：
+
+| 容器路径 | 内容 |
+| --- | --- |
+| `/data/config.yaml` | 平台 Cookie 等配置，首次启动生成，之后不覆盖 |
+| `/data/data/` | SQLite 数据库、实例锁和升级备份 |
+| `/data/record/` | 默认录制目录 |
+| `/data/logs/` | 运行日志和 HTTP 访问日志 |
+
+容器内设置中的保存路径应使用容器路径。额外挂载录制磁盘时，例如
+`--mount type=bind,source=/srv/recordings,target=/recordings`，将保存路径设置为
+`/recordings`，并确保挂载目录允许 UID `10001` 写入。Windows 盘符路径不能直接作为容器内路径。
+命名卷不会自动导入本机数据库；迁移已有数据前先停止旧后端，并调整原有录制目录设置。
+
+默认时区为 `Asia/Shanghai`，可用 `-e TZ=UTC` 等覆盖。`docker logs -f live-recorder`
+查看控制台输出；`docker stop -t 120 live-recorder` 会给服务留出时间回收录制及文件处理任务。
+健康检查复用 `/api/recording-status`，无需额外健康接口。每个数据卷只启动一个后端实例。
+
 ### Windows EXE
 
 先在 `frontend/` 执行 `npm ci`、`npm run build`，然后在项目根目录的虚拟环境中运行：

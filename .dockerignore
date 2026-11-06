@@ -1,0 +1,21 @@
+# 仅发送构建所需的文件，排除本机 Cookie、数据库、视频、日志和虚拟环境。
+**
+!Dockerfile
+!.dockerignore
+!requirements.txt
+!run.py
+!app/
+!app/**
+!docker/
+!docker/**
+!frontend/
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/index.html
+!frontend/vite.config.js
+!frontend/src/
+!frontend/src/**
+!frontend/public/
+!frontend/public/**
+**/__pycache__/
+**/*.pyc

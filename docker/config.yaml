@@ -1,0 +1,21 @@
+# 容器首次启动时复制到 /data/config.yaml，已有配置保持不变。
+database:
+  url: "sqlite+aiosqlite:///./data/live_recorder.db"
+
+logging:
+  level: "INFO"
+  quiet_loggers:
+    - "httpx"
+    - "httpcore"
+    - "aiosqlite"
+
+crawler:
+  auto_start: false
+
+platforms:
+  douyin:
+    cookie: ""
+  bilibili:
+    cookie: ""
+  douyu:
+    cookie: ""
