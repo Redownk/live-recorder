@@ -61,8 +61,9 @@ class DouyuRecorder(BaseRecorder):
         reconnect_count = 0
         max_reconnect = 10
         segment_index = 1
-        logger.info(self._log_message("开始录制: %s"), file_name)
-        start_timestamp = time.time()
+        self.log_recording_plan(file_name)
+        start_timestamp = time.monotonic()
+        end_reason = "重连次数达到上限"
         process = None
 
         try:
@@ -73,24 +74,27 @@ class DouyuRecorder(BaseRecorder):
                 try:
                     process = await self.spawn_recording_process(cmd)
 
-                    logger.info(self._log_message("ffmpeg 启动"))
+                    logger.info(self._log_message("录制进程已启动：分片=%s，PID=%s"), segment_index,
+                                getattr(process, "pid", "未知"), extra={"event_code": "recording_start"})
                     self.recording_started(log_id)
                     try:
                         return_code = await self.wait_recording_process(process, output_file, log_id)
                     finally:
                         self.recording_reconnecting(log_id)
-                    logger.info(self._log_message("流断开，return_code: %s"), return_code)
+                    logger.info(self._log_message("分片录制已结束：分片=%s，退出码=%s"), segment_index, return_code,
+                                extra={"event_code": "recording_segment"})
 
                     segment_advance = await self.complete_recording_segment(output_file, log_id)
                     segment_index += segment_advance
                     if self._segment_health_error is not None:
                         stream_url = await self.recover_recording_stream(stream_url)
                         if stream_url is None:
+                            end_reason = "主播已下播"
                             break
                         continue
                     if segment_advance and self._segment_had_data:
                         reconnect_count = 0
-                        logger.info(self._log_message("有效分段: %s"), output_file)
+                        logger.info(self._log_message("有效录制分片已保留：%s"), output_file, extra={"event_code": "recording_segment"})
 
                     offline_confirm = 0
                     for _ in range(3):
@@ -100,37 +104,41 @@ class DouyuRecorder(BaseRecorder):
                             offline_confirm += 1
 
                     if offline_confirm >= 3:
-                        logger.info(self._log_message("确认主播下播"))
+                        end_reason = "主播已下播"
+                        logger.info(self._log_message("连续 3 次检测未开播，确认主播下播"), extra={"event_code": "live_check"})
                         break
 
                     reconnect_count += 1
                     wait_time = min(5 * reconnect_count, 30)
-                    logger.warning(self._log_message("断流，%s秒后重连 (%s/%s)"), wait_time, reconnect_count, max_reconnect)
+                    logger.warning(self._log_message("直播流中断，等待 %s 秒后重连（连续重试 %s/%s）"), wait_time, reconnect_count, max_reconnect, extra={"event_code": "recording_retry"})
                     await asyncio.sleep(wait_time)
                     stream_url = await self.refresh_stream_url(live_info, stream_url)
                     is_m3u8 = ".m3u8" in stream_url.lower()
                 except (RecordingHealthError, DiskSpaceError):
                     raise
                 except Exception as e:
-                    logger.exception(self._log_message("录制异常: %s"), e)
+                    logger.exception(self._log_message("录制异常，5 秒后重试（连续重试 %s/%s）：%s"), reconnect_count + 1, max_reconnect, e, extra={"event_code": "recording_retry"})
                     reconnect_count += 1
                     await asyncio.sleep(5)
+        except (RecordingHealthError, DiskSpaceError) as exc:
+            end_reason = str(exc)
+            raise
         finally:
             self.recording_finished(log_id)
             await self.stop_process(process)
 
             end_time = datetime.now()
-            live_seconds = int(time.time() - start_timestamp)
+            live_seconds = int(time.monotonic() - start_timestamp)
 
             await self.repository.finish_log(
                 log_id, end_time, live_seconds, 0, 0,
                 interrupted=bool(asyncio.current_task().cancelling()) or self._recovery.failed,
             )
 
-            logger.info(self._log_message("%s 直播结束"), file_name)
+            self.log_recording_end(end_reason, live_seconds, reconnect_count)
             if not asyncio.current_task().cancelling() and not self._recovery.failed:
                 await self._post_process(file_name, segment_index, log_id)
             elif self.recording_options().segment_minutes and not self._recovery.failed:
                 await self.register_timed_segments(file_name, segment_index, log_id, probe_durations=False)
             else:
-                logger.info(self._log_message("录制已中断，保留分片文件"))
+                logger.info(self._log_message("原始录制分片已保留，可在视频处理中继续整理"), extra={"event_code": "recording_end"})

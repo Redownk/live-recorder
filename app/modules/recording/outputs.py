@@ -4,8 +4,10 @@ import asyncio
 from pathlib import Path
 
 from app.core.logger import get_logger
+from app.core.log_context import current_log_context
 from app.modules.recording.disk import DiskSpaceError, get_disk_guard
 from app.modules.recording.tasks import get_recording_tasks
+from app.modules.recording.log_events import room_label
 from app.shared.media.concat import merge_segments
 from app.shared.media.probe import probe_duration
 
@@ -21,6 +23,11 @@ class RecordingOutput:
         self.room = room
         self.repository = repository
 
+    def _log_message(self, message):
+        """为文件处理日志补充与录制流程一致的房间和录制编号。"""
+        log_id = current_log_context().get("recording_log_id")
+        return f"{room_label(self.room)}{f' [录制 #{log_id}]' if log_id is not None else ''} {message}"
+
     async def finalize(self, file_name, segment_count, log_id, *, segment_minutes=0, timed_output=None):
         """按录制设置合并分片或逐个登记定时分片。
 
@@ -31,11 +38,11 @@ class RecordingOutput:
             segment_minutes: 定时分片时长；为 0 时执行合并。
             timed_output: 当前定时分片跟踪器，允许为 None。
         """
-        logger.info("开始后处理")
+        logger.debug(self._log_message("开始整理录制文件"))
         key = (self.room["platform"], str(self.room["room_id"]))
         get_recording_tasks(self.app).phases[key] = "registering" if segment_minutes else "merging"
         if segment_count <= 0:
-            logger.info("没有分段文件，跳过处理")
+            logger.warning(self._log_message("没有录制分片，未生成视频文件"), extra={"event_code": "processing"})
             return
         if segment_minutes:
             await self.register_segments(file_name, segment_count, log_id, timed_output=timed_output)
@@ -47,38 +54,40 @@ class RecordingOutput:
             if segments:
                 formats[extension] = segments
         if len(formats) > 1:
-            logger.warning("录制流格式发生变化，保留全部 TS / FLV 分片，不自动合并")
+            logger.warning(self._log_message("录制流格式发生变化：TS 分片=%s，FLV 分片=%s；原文件已保留，请在视频处理中分别整理"),
+                           len(formats.get("ts", [])), len(formats.get("flv", [])), extra={"event_code": "processing"})
             return
         if not formats:
-            logger.info("没有有效分段文件，跳过处理")
+            logger.warning(self._log_message("没有非空录制分片，未生成视频文件"), extra={"event_code": "processing"})
             return
         extension, segments = next(iter(formats.items()))
         try:
             await get_disk_guard(self.app).ensure_can_start(segments[0].parent, sum(path.stat().st_size for path in segments))
         except DiskSpaceError as exc:
-            logger.warning("%s", exc)
+            logger.warning(self._log_message("磁盘空间不足，暂停合并并保留原分片：%s"), exc, extra={"event_code": "disk_space"})
             return
         listing = Path(f"{file_name}_filelist.txt")
         merged = Path(f"{file_name}.{extension}")
-        logger.info("开始合并分段")
+        logger.info(self._log_message("开始合并录制文件：分片数=%s，输出=%s"), len(segments), merged, extra={"event_code": "processing"})
         return_code = await merge_segments(segments, merged, listing)
         if return_code != 0 or not merged.is_file() or merged.stat().st_size == 0:
-            logger.warning("合并失败，保留分段文件，退出码: %s", return_code, extra={"event_code": "processing"})
+            logger.warning(self._log_message("合并未成功：退出码=%s，目标=%s；原分片已保留"), return_code, merged, extra={"event_code": "processing"})
             return
         try:
             video = await self._video_metadata(merged)
             await self.repository.register_videos(self.room["id"], log_id, [video])
         except Exception:
-            logger.exception("本地视频登记失败，保留录制文件")
+            logger.exception(self._log_message("视频信息登记失败：文件=%s；合并文件和原分片均已保留"), merged, extra={"event_code": "database"})
             return
-        logger.info("本地视频已保存: %s", merged)
+        logger.info(self._log_message("视频已保存并登记：文件=%s，大小=%.2f MiB，视频时长=%s 秒"),
+                    merged, video["file_size"] / (1024 * 1024), video["duration"], extra={"event_code": "recording_saved"})
         try:
             listing.unlink()
             for segment in segments:
                 segment.unlink()
         except OSError:
-            logger.exception("清理文件失败")
-        logger.info("后处理完成")
+            logger.exception(self._log_message("视频已登记，但原分片清理未完成，请检查文件权限"), extra={"event_code": "processing"})
+        logger.debug(self._log_message("录制文件整理流程结束"))
 
     async def register_segments(self, file_name, segment_count, log_id, *, timed_output=None, probe_durations=True):
         """登记已完成的非空分片，中断时可跳过时长探测。
@@ -99,8 +108,13 @@ class RecordingOutput:
                 path = Path(f"{file_name}_{index}.{extension}")
                 if path.is_file() and not path.is_symlink() and path.stat().st_size > 0:
                     videos.append(await self._video_metadata(path, probe_durations=probe_durations))
+        if not videos:
+            logger.warning(self._log_message("没有可登记的非空定时分片，请检查录制过程"), extra={"event_code": "processing"})
+            return
         await self.repository.register_videos(self.room["id"], log_id, videos, deduplicate=True)
-        logger.info("定时分片已独立保存，不执行合并")
+        logger.info(self._log_message("定时分片已独立保存并登记：有效文件数=%s，总大小=%.2f MiB，目录=%s，时长探测=%s"),
+                    len(videos), sum(video["file_size"] for video in videos) / (1024 * 1024), Path(file_name).parent,
+                    "已执行" if probe_durations else "已跳过", extra={"event_code": "recording_saved"})
 
     async def _video_metadata(self, path, *, probe_durations=True):
         duration = 0
@@ -108,5 +122,6 @@ class RecordingOutput:
             try:
                 duration = await probe_duration(path)
             except (OSError, ValueError, TypeError, TimeoutError) as exc:
-                logger.warning("视频时长读取失败，保留文件并登记大小: %s", exc)
+                logger.warning(self._log_message("视频时长读取失败：文件=%s，原因=%s；文件仍会登记，时长记为 0"), path, exc,
+                               extra={"event_code": "processing"})
         return {"file_name": path.name, "file_path": str(path.resolve()), "file_size": path.stat().st_size, "duration": duration}

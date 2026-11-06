@@ -209,7 +209,8 @@ async def check_room_live_status(room_id: int, db: AsyncSession = Depends(get_db
     with log_context(room_id=room.id, platform=room.platform, platform_room_id=str(room.room_id)):
         try:
             result = await recorder.check_live_status()
-            logger.info("手动检查直播状态：%s", "开播" if result.get("is_live") else "未开播")
+            if result.get("is_live"):
+                logger.info("手动检查直播状态：已开播", extra={"event_code": "live_check"})
             return result
         except Exception:
             logger.exception("手动检查直播状态失败", extra={"event_code": "live_check"})

@@ -127,8 +127,6 @@ class DouyinLiveChecker:
                 except (KeyError, IndexError):
                     # 如果 移动网页 端也没有数据，当做未开播处理
                     room_info = _room_info['data'].get('room', {})
-                if room_info.get('status') != 2:
-                    logger.debug("未开播")
                 se__room_id = room_info['id_str']
 
 

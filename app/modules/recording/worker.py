@@ -8,7 +8,7 @@ from app.modules.live_rooms.repository import LiveRoomRepository
 from app.modules.recording.factory import create_recorder
 from app.core.logger import setup_logging, get_logger
 from app.core.log_context import room_log_fields
-from app.modules.recording.disk import DiskSpaceError
+from app.modules.recording.log_events import room_label
 
 setup_logging()
 logger = get_logger(__name__)
@@ -39,9 +39,10 @@ async def crawler_loop(app, stop_event):
         app: 提供数据库和录制设置管理器的应用实例。
         stop_event: 停止事件，触发后结束轮询。
     """
-    logger.info("爬虫协程启动")
+    logger.info("直播间自动检测已启动")
     settings_manager = app.state.recording_settings
     last_checks = {}
+    previous_enabled = None
     while not stop_event.is_set():
         settings_manager.changed.clear()
         interval = settings_manager.settings.check_interval_seconds
@@ -50,7 +51,10 @@ async def crawler_loop(app, stop_event):
                 rooms = await LiveRoomRepository(db).monitored_snapshots()
             enabled_ids = {room["id"] for room in rooms}
             last_checks = {key: value for key, value in last_checks.items() if key in enabled_ids}
-            logger.info("本轮扫描启用直播间数量: %s", len(rooms))
+            if enabled_ids != previous_enabled:
+                logger.info("监控列表已更新：启用 %s 个直播间，各房间按自身检查间隔检测", len(rooms))
+                previous_enabled = enabled_ids
+            logger.debug("本轮扫描启用直播间数量：%s", len(rooms))
             for room in rooms:
                 if stop_event.is_set():
                     break
@@ -60,34 +64,25 @@ async def crawler_loop(app, stop_event):
                 previous = last_checks.get(room["id"])
                 if previous and previous[1] == revision and monotonic() < previous[0] + options.check_interval_seconds:
                     continue
+                recorder = None
                 try:
-                    logger.info(
-                        "开始检查直播间 platform=%s room_id=%s owner=%s",
-                        room.get("platform"),
-                        room.get("room_id"),
-                        room.get("owner"),
-                        extra=room_log_fields(room),
-                    )
                     recorder = create_recorder(app, room)
                     if recorder:
                         await recorder.start()
                     else:
                         logger.warning(
-                            "未找到平台录制器 platform=%s room_id=%s",
-                            room.get("platform"),
-                            room.get("room_id"),
+                            "%s 无法检测：未找到对应的平台录制器",
+                            room_label(room),
                             extra=room_log_fields(room),
                         )
-                except DiskSpaceError as exc:
-                    logger.warning("磁盘保护跳过录制 platform=%s room_id=%s: %s", room.get("platform"), room.get("room_id"), exc,
-                                   extra={**room_log_fields(room), "event_code": "disk_space"})
                 except Exception:
-                    logger.exception(
-                        "爬虫异常 platform=%s room_id=%s",
-                        room.get("platform"),
-                        room.get("room_id"),
-                        extra={**room_log_fields(room), "event_code": "live_check"},
-                    )
+                    if recorder is None:
+                        logger.exception("%s 创建录制器失败", room_label(room), extra={**room_log_fields(room), "event_code": "live_check"})
+                    elif getattr(recorder, "_check_failure_handled", False):
+                        # 具体失败原因由录制器记录，此处仅保持轮询继续，避免重复堆栈。
+                        logger.debug("%s 本轮检测失败，等待下次检测", room_label(room), extra=room_log_fields(room))
+                    else:
+                        logger.exception("%s 处理检测任务失败", room_label(room), extra={**room_log_fields(room), "event_code": "live_check"})
                 finally:
                     last_checks[room["id"]] = (monotonic(), revision)
             deadlines = [last_checks[room["id"]][0] + settings_manager.for_room(room).check_interval_seconds
@@ -95,6 +90,6 @@ async def crawler_loop(app, stop_event):
             if deadlines:
                 interval = max(0.05, min(deadlines) - monotonic())
         except Exception:
-            logger.exception("爬虫批次异常")
+            logger.exception("直播间检测批次失败，将在下次调度时重试", extra={"event_code": "live_check"})
         await wait_for_next_check(stop_event, settings_manager.changed, interval)
-    logger.info("爬虫协程停止")
+    logger.info("直播间自动检测已停止")

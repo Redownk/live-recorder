@@ -110,5 +110,6 @@ class RecordingProcessMonitor:
             await asyncio.gather(waiting, progress, error_reader, return_exceptions=True)
             if (not asyncio.current_task().cancelling() and getattr(process, "returncode", 0)
                     and self.health_error is None):
-                logger.warning("FFmpeg 异常退出: %s", errors.decode("utf-8", errors="replace") or "无错误输出",
+                logger.warning("FFmpeg 异常退出：退出码=%s，文件=%s，错误摘要=%s", process.returncode, output_file,
+                               errors.decode("utf-8", errors="replace") or "进程未提供错误输出",
                                extra={"event_code": "ffmpeg_exit"})

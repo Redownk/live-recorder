@@ -1,7 +1,9 @@
 """协调录制任务、平台适配、健康恢复及输出处理。"""
 
 import asyncio
+import logging
 from pathlib import Path
+from time import monotonic
 
 from app.core.logger import get_logger
 from app.core.log_context import recording_log_context
@@ -13,6 +15,7 @@ from app.modules.recording.disk import DiskSpaceError
 from app.modules.recording.outputs import RecordingOutput
 from app.modules.recording.process import RecordingProcessMonitor, spawn_recording_process
 from app.modules.recording.repository import RecordingRepository
+from app.modules.recording.log_events import room_label
 from app.shared.media.process import stop_process
 
 
@@ -34,6 +37,7 @@ class BaseRecorder:
         self._recording_options = None
         self._timed_output = None
         self._segment_had_data = False
+        self._check_failure_handled = False
 
     def recording_options(self):
         """获取并缓存本轮录制使用的房间配置，无管理器时使用默认配置。"""
@@ -136,21 +140,48 @@ class BaseRecorder:
         return previous_url
 
     def _log_message(self, message: str) -> str:
-        return f"[platform={self.platform} room_id={self.room_id}] {message}"
+        label = room_label(self.room)
+        log_id = getattr(self, "_log_id", None)
+        return f"{label}{f' [录制 #{log_id}]' if log_id is not None else ''} {message}"
+
+    def log_recording_plan(self, file_name):
+        """记录本轮配置和输出前缀，不输出带签名的直播流地址或请求头。"""
+        options = self.recording_options()
+        quality = {"best": "最佳", "high": "高", "medium": "中", "low": "低"}.get(options.quality, options.quality)
+        mode = f"每 {options.segment_minutes} 分钟独立保存" if options.segment_minutes else "结束后合并分片"
+        logger.info(self._log_message("开始录制：画质=%s，保存方式=%s，输出=%s"), quality, mode, file_name,
+                    extra={"event_code": "recording_start"})
+
+    def log_recording_end(self, reason, live_seconds, reconnect_count):
+        """记录实际结束原因和耗时，将录制结束与后续文件处理区分开。"""
+        if asyncio.current_task().cancelling():
+            reason = "任务已取消"
+        elif self._recovery.failed:
+            reason = "健康恢复失败，已暂停录制"
+        duration = max(0, int(live_seconds))
+        hours, remainder = divmod(duration, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        logger.log(logging.WARNING if reason == "重连次数达到上限" else logging.INFO,
+                   self._log_message("录制结束：原因=%s，录制时长=%02d:%02d:%02d，当前连续重连=%s，健康恢复=%s；开始整理文件"),
+                   reason, hours, minutes, seconds, reconnect_count, self._recovery.restart_count,
+                   extra={"event_code": "recording_end"})
 
     @recording_log_context
     async def start(self, manual=False, token=None):
+        self._check_failure_handled = False
         manager = get_recording_tasks(self.app)
         key = (self.platform, str(self.room_id))
         if self.room.get("id") is not None:
             manager.room_ids[key] = self.room["id"]
         token = token if token is not None else manager.begin_check(key, manual=manual)
         if token is None:
-            logger.info(self._log_message("已有检查或录制任务，跳过"))
+            logger.debug(self._log_message("跳过检测：已有任务或当前不允许启动"))
             return {"status": "busy"}
         if manager.checks.get(key) is not token:
             return {"status": "stopped"}
-        logger.info(self._log_message("开始检测直播状态"))
+        started_at = monotonic()
+        logger.debug(self._log_message("开始检测直播状态：触发方式=%s"), "手动" if manual else "自动",
+                     extra={"event_code": "live_check"})
         try:
             self._recording_options = None
             from app.modules.recording.disk import DiskSpaceError, get_disk_guard
@@ -170,19 +201,34 @@ class BaseRecorder:
                     raise
                 return {"status": "stopped"}
             if not live_info["is_live"]:
-                logger.info(self._log_message("未开播，跳过录制: %s"), live_info)
+                # 只更新检测状态以重置错误去重，未开播不输出日志。
+                manager.check_logs.observe(key, "offline")
                 manager.notices.pop(key, None)
                 return {"status": "offline"}
             await guard.ensure_can_start(directory)
-            logger.info(self._log_message("检测到开播，准备录制: %s"), live_info.get("owner"))
+            decision = manager.check_logs.observe(key, "live", force=manual)
             started = manager.start_recording(key, lambda: self.record(live_info), self.finish_recording_task,
                                               token=token, manual=manual)
+            if started:
+                logger.info(self._log_message("%s检测到开播，已提交录制任务；主播=%s，检测耗时=%.2f 秒"),
+                            "检测已恢复；" if decision.recovered else "", " ".join(str(live_info.get("owner") or "未知").split())[:80], monotonic() - started_at,
+                            extra={"event_code": "live_check"})
             return {"status": "started" if started else "stopped"}
         except DiskSpaceError as exc:
+            self._check_failure_handled = True
             manager.notices[key] = {"state": "disk_blocked", "message": str(exc)}
+            decision = manager.check_logs.observe(key, "disk_blocked", detail=str(exc), force=manual)
+            if decision.emit:
+                logger.warning(self._log_message("磁盘保护阻止录制：%s；已合并 %s 次重复结果"), exc, decision.suppressed,
+                               extra={"event_code": "disk_space"})
             raise
-        except Exception:
-            logger.exception(self._log_message("直播状态检查失败"), extra={"event_code": "live_check"})
+        except Exception as exc:
+            self._check_failure_handled = True
+            decision = manager.check_logs.observe(key, "error", detail=f"{type(exc).__name__}:{str(exc)[:500]}", force=manual)
+            if decision.emit:
+                reason = "检测超时（直播状态请求上限为 30 秒）" if isinstance(exc, TimeoutError) else f"{type(exc).__name__}: {exc}"
+                logger.exception(self._log_message("直播检测失败：%s；耗时=%.2f 秒，已合并 %s 次重复失败"),
+                                 reason, monotonic() - started_at, decision.suppressed, extra={"event_code": "live_check"})
             raise
         finally:
             manager.end_check(key, token)

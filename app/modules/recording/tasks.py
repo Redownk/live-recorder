@@ -4,6 +4,7 @@
 import asyncio
 
 from app.core.logger import get_logger
+from app.modules.recording.log_events import CheckLogLimiter
 
 
 logger = get_logger(__name__)
@@ -27,6 +28,7 @@ class RecordingTaskManager:
         self.stopping_all = False
         self.closing = False
         self.paused = False
+        self.check_logs = CheckLogLimiter()
 
     def allows_start(self, key, manual=False):
         """判断直播间当前是否允许启动检查或录制。
